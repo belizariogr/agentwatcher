@@ -1,6 +1,15 @@
 #!/bin/bash
-# Build a universal AgentWatcher.app, sign it with a Developer ID, wrap it in a
-# DMG, notarize and staple. Output: build/AgentWatcher-<version>.dmg
+# Release pipeline in stages, each working on files in ./build so it can run
+# on its own (CI runs one stage per job and passes the files as artifacts):
+#
+#   build      universal, ad-hoc signed build/AgentWatcher.app
+#   sign-app   Developer ID signature (hardened runtime) on the app
+#   dmg        build/AgentWatcher-<version>.dmg with the installer window
+#   sign-dmg   Developer ID signature on the DMG, app inside checked
+#   notarize   notarize, staple, Gatekeeper check, SHA-256
+#
+#   scripts/release.sh                 every stage (same as `all`)
+#   scripts/release.sh dmg sign-dmg    only these, in this order
 #
 # Credentials (from the environment, or ./.env, which Git ignores):
 #   MACOS_P12_FILE + MACOS_P12_PASSWORD   Developer ID .p12, imported into a
@@ -11,7 +20,7 @@
 #   MACOS_TEAM_ID                         default 3Z7C3Q7NMT
 #   MACOS_NOTARY_APPLE_ID + MACOS_NOTARY_PASSWORD (app-specific password), or
 #   MACOS_NOTARY_PROFILE                  a `notarytool store-credentials` profile.
-#   SKIP_NOTARIZE=1                       sign only (quick local check).
+#   SKIP_NOTARIZE=1                       `all` stops after sign-dmg.
 #   DMGBUILD                              optional path to a dmgbuild to use instead
 #                                         of the hash-pinned one in build/.venv.
 set -euo pipefail
@@ -26,27 +35,22 @@ fi
 
 fail() { echo "release: $*" >&2; exit 1; }
 
+ALL_STAGES=(build sign-app dmg sign-dmg notarize)
+stages=("$@")
+if [[ ${#stages[@]} -eq 0 || "${stages[*]}" == "all" ]]; then
+  stages=(build sign-app dmg sign-dmg)
+  [[ "${SKIP_NOTARIZE:-0}" == "1" ]] || stages+=(notarize)
+fi
+for stage in "${stages[@]}"; do
+  [[ " ${ALL_STAGES[*]} " == *" $stage "* ]] || fail "unknown stage: $stage (stages: ${ALL_STAGES[*]})"
+done
+wants() { [[ " ${stages[*]} " == *" $1 "* ]]; }
+
 TEAM_ID="${MACOS_TEAM_ID:-3Z7C3Q7NMT}"
 [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || fail "invalid MACOS_TEAM_ID"
+APP="build/AgentWatcher.app"
+requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
 
-# --- dmgbuild, before any credential is loaded ------------------------------
-# Hash-pinned (scripts/dmg-requirements.txt): third-party code must not run
-# next to an unlocked signing keychain unless it is exactly what was reviewed.
-if [[ -n "${DMGBUILD:-}" ]]; then
-  "$DMGBUILD" --help >/dev/null 2>&1 || fail "DMGBUILD is set but does not run: $DMGBUILD"
-  dmgbuild="$DMGBUILD"
-else
-  dmgbuild="build/.venv/bin/dmgbuild"
-  if ! "$dmgbuild" --help >/dev/null 2>&1; then
-    command -v python3 >/dev/null || fail "python3 is needed to install dmgbuild"
-    rm -rf build/.venv
-    python3 -m venv build/.venv || fail "could not create build/.venv"
-    build/.venv/bin/pip install --quiet --disable-pip-version-check --require-hashes --only-binary :all: \
-      -r scripts/dmg-requirements.txt || fail "could not install dmgbuild"
-  fi
-fi
-
-# --- Temporary keychain for a .p12 (never touches the login keychain) -------
 tmp_dir=""
 keychain=""
 mount=""
@@ -62,39 +66,87 @@ cleanup() {
 trap cleanup EXIT
 tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/agentwatcher-release.XXXXXX")"
 
-if [[ -n "${MACOS_P12_FILE:-}" ]]; then
-  [[ -f "$MACOS_P12_FILE" ]] || fail "certificate not found: $MACOS_P12_FILE"
-  [[ -n "${MACOS_P12_PASSWORD:-}" ]] || fail "MACOS_P12_PASSWORD is required with MACOS_P12_FILE"
-  keychain="$tmp_dir/signing.keychain-db"
-  while IFS= read -r item; do
-    [[ -z "$item" ]] || original_keychains+=("$item")
-  done < <(security list-keychains -d user | sed -e 's/^ *"//' -e 's/"$//')
-  keychain_password="$(openssl rand -base64 32)"
-  security create-keychain -p "$keychain_password" "$keychain"
-  security set-keychain-settings -lut 3600 "$keychain"
-  security unlock-keychain -p "$keychain_password" "$keychain"
-  security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
-  security import "$MACOS_P12_FILE" -k "$keychain" -P "$MACOS_P12_PASSWORD" \
-    -T /usr/bin/codesign -T /usr/bin/security >/dev/null || fail "could not open the .p12 (check MACOS_P12_PASSWORD)"
-  security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
-  unset keychain_password
-fi
+# Retry a flaky network call (Apple's notary and ticket services drop
+# connections now and then).
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    "$@" && return 0
+    [[ "$attempt" == 5 ]] && return 1
+    echo "release: retrying in $((attempt * 15))s: $*" >&2
+    sleep $((attempt * 15))
+  done
+}
 
-# --- Signing identity ---------------------------------------------------------
-identity="${MACOS_CODESIGN_IDENTITY:-}"
-if [[ -z "$identity" ]]; then
-  matches="$(security find-identity -v -p codesigning ${keychain:+"$keychain"} \
-    | grep "Developer ID Application: .*($TEAM_ID)" | awk '{print $2}' | sort -u)"
-  [[ -n "$matches" ]] || fail "no \"Developer ID Application\" identity for team $TEAM_ID"
-  [[ "$(wc -l <<<"$matches" | tr -d ' ')" == "1" ]] || fail "several Developer ID identities; set MACOS_CODESIGN_IDENTITY"
-  identity="$matches"
-fi
-sign_args=(--force --options runtime --timestamp --sign "$identity")
-[[ -z "$keychain" ]] || sign_args+=(--keychain "$keychain")
+the_dmg() {
+  local found=(build/AgentWatcher-*.dmg)
+  [[ -f "${found[0]}" ]] || fail "no build/AgentWatcher-*.dmg (run the dmg stage first)"
+  [[ ${#found[@]} -eq 1 ]] || fail "several DMGs in build/: ${found[*]}"
+  echo "${found[0]}"
+}
 
-# --- Notary credentials (checked before the slow build) ----------------------
+need_signed_app() {
+  [[ -d "$APP" ]] || fail "$APP is missing"
+  codesign --verify --deep --strict -R "$requirement" "$APP" || fail "$APP is not signed with a Developer ID of $TEAM_ID"
+}
+
+# --- dmgbuild, before any credential is loaded ------------------------------
+# Hash-pinned (scripts/dmg-requirements.txt): third-party code must not run
+# next to an unlocked signing keychain unless it is exactly what was reviewed.
+dmgbuild=""
+setup_dmgbuild() {
+  if [[ -n "${DMGBUILD:-}" ]]; then
+    "$DMGBUILD" --help >/dev/null 2>&1 || fail "DMGBUILD is set but does not run: $DMGBUILD"
+    dmgbuild="$DMGBUILD"
+    return
+  fi
+  dmgbuild="build/.venv/bin/dmgbuild"
+  if ! "$dmgbuild" --help >/dev/null 2>&1; then
+    command -v python3 >/dev/null || fail "python3 is needed to install dmgbuild"
+    rm -rf build/.venv
+    python3 -m venv build/.venv || fail "could not create build/.venv"
+    build/.venv/bin/pip install --quiet --disable-pip-version-check --require-hashes --only-binary :all: \
+      -r scripts/dmg-requirements.txt || fail "could not install dmgbuild"
+  fi
+}
+
+# --- Signing identity (temporary keychain for a .p12) ------------------------
+sign_args=()
+setup_signing() {
+  if [[ -n "${MACOS_P12_FILE:-}" ]]; then
+    [[ -f "$MACOS_P12_FILE" ]] || fail "certificate not found: $MACOS_P12_FILE"
+    [[ -n "${MACOS_P12_PASSWORD:-}" ]] || fail "MACOS_P12_PASSWORD is required with MACOS_P12_FILE"
+    keychain="$tmp_dir/signing.keychain-db"
+    while IFS= read -r item; do
+      [[ -z "$item" ]] || original_keychains+=("$item")
+    done < <(security list-keychains -d user | sed -e 's/^ *"//' -e 's/"$//')
+    local keychain_password
+    keychain_password="$(openssl rand -base64 32)"
+    security create-keychain -p "$keychain_password" "$keychain"
+    security set-keychain-settings -lut 3600 "$keychain"
+    security unlock-keychain -p "$keychain_password" "$keychain"
+    security list-keychains -d user -s "$keychain" ${original_keychains[@]+"${original_keychains[@]}"}
+    security import "$MACOS_P12_FILE" -k "$keychain" -P "$MACOS_P12_PASSWORD" \
+      -T /usr/bin/codesign -T /usr/bin/security >/dev/null || fail "could not open the .p12 (check MACOS_P12_PASSWORD)"
+    security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" >/dev/null
+  fi
+
+  local identity="${MACOS_CODESIGN_IDENTITY:-}"
+  if [[ -z "$identity" ]]; then
+    local matches
+    matches="$(security find-identity -v -p codesigning ${keychain:+"$keychain"} \
+      | grep "Developer ID Application: .*($TEAM_ID)" | awk '{print $2}' | sort -u)"
+    [[ -n "$matches" ]] || fail "no \"Developer ID Application\" identity for team $TEAM_ID"
+    [[ "$(wc -l <<<"$matches" | tr -d ' ')" == "1" ]] || fail "several Developer ID identities; set MACOS_CODESIGN_IDENTITY"
+    identity="$matches"
+  fi
+  sign_args=(--force --options runtime --timestamp --sign "$identity")
+  [[ -z "$keychain" ]] || sign_args+=(--keychain "$keychain")
+}
+
+# --- Notary credentials (checked before the slow stages) ---------------------
 notary_args=()
-if [[ "${SKIP_NOTARIZE:-0}" != "1" ]]; then
+setup_notary() {
   if [[ -n "${MACOS_NOTARY_APPLE_ID:-}" && -n "${MACOS_NOTARY_PASSWORD:-}" ]]; then
     notary_args=(--apple-id "$MACOS_NOTARY_APPLE_ID" --password "$MACOS_NOTARY_PASSWORD" --team-id "$TEAM_ID")
   elif [[ -n "${MACOS_NOTARY_PROFILE:-}" ]]; then
@@ -102,72 +154,94 @@ if [[ "${SKIP_NOTARIZE:-0}" != "1" ]]; then
   else
     fail "set MACOS_NOTARY_APPLE_ID + MACOS_NOTARY_PASSWORD, or MACOS_NOTARY_PROFILE (or SKIP_NOTARIZE=1)"
   fi
-  xcrun notarytool history "${notary_args[@]}" --output-format json >/dev/null \
+  retry xcrun notarytool history "${notary_args[@]}" --output-format json >/dev/null \
     || fail "notary credentials were rejected"
-fi
-
-# --- Build and sign the app ---------------------------------------------------
-UNIVERSAL=1 ./scripts/build-app.sh
-APP="build/AgentWatcher.app"
-VERSION="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
-archs="$(lipo -archs "$APP/Contents/MacOS/AgentWatcher")"
-[[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]] || fail "binary is not universal ($archs)"
-
-codesign "${sign_args[@]}" "$APP"
-codesign --verify --deep --strict --verbose=2 "$APP"
-requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID\" and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
-codesign --verify --strict -R "$requirement" "$APP" || fail "app is not signed with a Developer ID of $TEAM_ID"
-
-# --- DMG ----------------------------------------------------------------------
-# Installer window with the BGDesk artwork (Resources/dmg, scripts/dmg-settings.py).
-DMG="build/AgentWatcher-$VERSION.dmg"
-rm -f "$DMG"
-"$dmgbuild" -s scripts/dmg-settings.py -D app="$APP" "Agent Watcher" "$DMG"
-codesign "${sign_args[@]}" --identifier com.belizariogr.agentwatcher.dmg "$DMG"
+}
 
 # Check the image as a user gets it: the app must be there, intact and signed
 # (dmgbuild does not fail when copying the app fails). With notarized=1 the
 # app must also pass Gatekeeper.
 check_dmg() {
+  local dmg="$1"
   mount="$tmp_dir/mount"
   mkdir -p "$mount"
-  hdiutil attach -readonly -nobrowse -quiet -mountpoint "$mount" "$DMG" || fail "could not mount $DMG"
+  hdiutil attach -readonly -nobrowse -quiet -mountpoint "$mount" "$dmg" || fail "could not mount $dmg"
   local app="$mount/AgentWatcher.app"
   [[ -d "$app" ]] || fail "AgentWatcher.app is missing from the DMG"
   [[ -L "$mount/Applications" ]] || fail "Applications link is missing from the DMG"
   codesign --verify --deep --strict -R "$requirement" "$app" || fail "the app in the DMG is not intact"
-  if [[ "${1:-}" == "notarized" ]]; then
+  if [[ "${2:-}" == "notarized" ]]; then
     spctl --assess --type execute --verbose=2 "$app" || fail "Gatekeeper rejected the app"
   fi
   hdiutil detach "$mount" -quiet
   mount=""
 }
 
-# --- Notarize and staple ------------------------------------------------------
-if [[ "${SKIP_NOTARIZE:-0}" == "1" ]]; then
-  check_dmg
-  echo "release: signed, NOT notarized (SKIP_NOTARIZE=1): $DMG"
-  exit 0
-fi
+# --- Stages -------------------------------------------------------------------
+stage_build() {
+  UNIVERSAL=1 ./scripts/build-app.sh
+  local archs
+  archs="$(lipo -archs "$APP/Contents/MacOS/AgentWatcher")"
+  [[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]] || fail "binary is not universal ($archs)"
+}
 
-result="$tmp_dir/notary.json"
-xcrun notarytool submit "$DMG" "${notary_args[@]}" --wait --timeout 30m --output-format json >"$result" || true
-status="$(plutil -extract status raw "$result" 2>/dev/null || echo unknown)"
-if [[ "$status" != "Accepted" ]]; then
-  id="$(plutil -extract id raw "$result" 2>/dev/null || true)"
-  [[ -z "$id" ]] || xcrun notarytool log "$id" "${notary_args[@]}" >&2 || true
-  fail "notarization status: $status"
-fi
+stage_sign_app() {
+  [[ -d "$APP" ]] || fail "$APP is missing (run the build stage first)"
+  codesign "${sign_args[@]}" "$APP"
+  codesign --verify --deep --strict --verbose=2 "$APP"
+  need_signed_app
+}
 
-for attempt in 1 2 3 4 5; do
-  xcrun stapler staple "$DMG" && break
-  [[ "$attempt" == 5 ]] && fail "stapler failed"
-  sleep $((attempt * 10))
+stage_dmg() {
+  need_signed_app
+  local version
+  version="$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")"
+  rm -f build/AgentWatcher-*.dmg
+  local dmg="build/AgentWatcher-$version.dmg"
+  # Installer window with the BGDesk artwork (Resources/dmg, scripts/dmg-settings.py).
+  "$dmgbuild" -s scripts/dmg-settings.py -D app="$APP" "Agent Watcher" "$dmg"
+  check_dmg "$dmg"
+}
+
+stage_sign_dmg() {
+  local dmg
+  dmg="$(the_dmg)"
+  codesign "${sign_args[@]}" --identifier com.belizariogr.agentwatcher.dmg "$dmg"
+  codesign --verify --strict -R "$requirement" "$dmg" || fail "the DMG signature is not ours"
+  check_dmg "$dmg"
+}
+
+stage_notarize() {
+  local dmg result status id
+  dmg="$(the_dmg)"
+  codesign --verify --strict -R "$requirement" "$dmg" || fail "sign the DMG first (sign-dmg)"
+
+  # An already stapled DMG (a retried stage) only needs the checks.
+  if ! xcrun stapler validate -q "$dmg" >/dev/null 2>&1; then
+    result="$tmp_dir/notary.json"
+    xcrun notarytool submit "$dmg" "${notary_args[@]}" --wait --timeout 30m --output-format json >"$result" || true
+    status="$(plutil -extract status raw "$result" 2>/dev/null || echo unknown)"
+    if [[ "$status" != "Accepted" ]]; then
+      id="$(plutil -extract id raw "$result" 2>/dev/null || true)"
+      [[ -z "$id" ]] || xcrun notarytool log "$id" "${notary_args[@]}" >&2 || true
+      fail "notarization status: $status"
+    fi
+    retry xcrun stapler staple "$dmg" || fail "stapler failed"
+  fi
+  retry xcrun stapler validate "$dmg" || fail "stapled ticket does not validate"
+  spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+  check_dmg "$dmg" notarized
+  shasum -a 256 "$dmg"
+}
+
+# Setup in this order: dmgbuild (no credentials around yet), then the keychain,
+# then the notary check, so a bad credential fails before the slow stages.
+if wants dmg; then setup_dmgbuild; fi
+if wants sign-app || wants sign-dmg; then setup_signing; fi
+if wants notarize; then setup_notary; fi
+
+for stage in "${stages[@]}"; do
+  echo "release: == $stage =="
+  "stage_${stage//-/_}"
 done
-xcrun stapler validate "$DMG"
-spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
-
-check_dmg notarized
-
-shasum -a 256 "$DMG"
-echo "release: $DMG"
+echo "release: done (${stages[*]})"

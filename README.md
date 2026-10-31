@@ -41,17 +41,36 @@ make icon PALETTE=aurora BG=light && make run
 
 ## Releases
 
-Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml` on a macOS runner:
-tests, a universal (Apple silicon + Intel) build, Developer ID signature with
-hardened runtime, DMG, notarization and stapling, then a GitHub Release with
-the DMG and its SHA-256.
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, one job per stage,
+each handing its output to the next as an artifact:
+
+| Stage | Does | Artifact |
+|---|---|---|
+| `build` | tests, universal (Apple silicon + Intel) build | `app-unsigned` |
+| `sign-app` | Developer ID signature, hardened runtime | `app-signed` |
+| `dmg` | installer DMG (no credentials in this job) | `dmg-unsigned` |
+| `sign-dmg` | Developer ID signature on the DMG | `dmg-signed` |
+| `notarize` | notarization, stapling, Gatekeeper check | `AgentWatcher-dmg` |
+| `publish` | GitHub Release with the DMG and its SHA-256 | |
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
 ```
 
-Running the workflow by hand (Actions → Release → Run workflow) produces the
-signed DMG as an artifact without publishing.
+**Resuming after a failure:**
+
+- *Re-run failed jobs* on the run page redoes only the failed stage and the
+  ones after it; earlier stages keep their artifacts (kept 14 days).
+- After changing the workflow or a script, start a new run on the same tag,
+  taking the earlier stages from the failed run (both runs must be on the same
+  commit):
+
+  ```bash
+  gh workflow run release.yml --ref v0.1.0 -f resume_run=<run id> -f start_at=notarize
+  ```
+
+Running the workflow by hand on a branch produces the signed DMG as an artifact
+without publishing (`-f notarize=false` skips notarization).
 
 The workflow reads these Secrets: `MACOS_P12_BASE64`, `MACOS_P12_PASSWORD`,
 `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_PASSWORD` (and optionally
@@ -64,7 +83,13 @@ scripts/setup-github-secrets.py --apply    # reads ./.env, or ../bgdesk/.env
 ```
 
 The same pipeline runs locally with `make release`, reading `./.env` (see
-`.env.example`); `SKIP_NOTARIZE=1 make release` only signs.
+`.env.example`); `SKIP_NOTARIZE=1 make release` only signs. Stages also run on
+their own, working on the files in `build/`:
+
+```bash
+scripts/release.sh build sign-app   # just these
+scripts/release.sh notarize         # resume: notarize the signed DMG in build/
+```
 
 ## Updates
 
