@@ -50,9 +50,8 @@ Nenhum token sai da máquina além do header das consultas à Anthropic e ao
 Cursor. Os tokens não são renovados pelo app: se o do Claude expirar, abrir o
 Claude Code renova; o do Cursor, `cursor-agent login`.
 
-No Cursor, o uso incluído é mensal e dividido em dois pools: **Auto + Composer**
-e **API** (modelos escolhidos pelo nome). **Mensal** é o total que o Cursor
-reporta.
+No Cursor, o uso incluído é mensal e dividido em dois pools: **Cursor Models**
+(Auto + Composer) e **Other Models** (modelos de terceiros escolhidos pelo nome).
 Se uma atualização falhar (ex.: a Anthropic limitando consultas), o painel
 mantém os últimos números bons e mostra o aviso.
 

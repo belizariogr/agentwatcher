@@ -99,8 +99,9 @@ public struct CursorProvider: UsageProvider {
     return usage
   }
 
-  /// Included usage is split into the Auto + Composer pool and the API pool
-  /// (named models); both renew with the billing cycle.
+  /// Included usage is split into the Auto + Composer pool ("Cursor Models")
+  /// and the API pool for named third-party models ("Other Models"); both
+  /// renew with the billing cycle.
   static func parseLimits(_ payload: JSON) -> [UsageLimit] {
     guard let plan = payload.object("planUsage") else { return [] }
     let resets = Dates.parse(payload["billingCycleEnd"])
@@ -109,9 +110,8 @@ public struct CursorProvider: UsageProvider {
       guard let pct = plan.number(key), pct >= 0 else { return }
       limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: resets))
     }
-    add("totalPercentUsed", "Mensal")
-    add("autoPercentUsed", "Auto + Composer")
-    add("apiPercentUsed", "API")
+    add("autoPercentUsed", "Cursor Models")
+    add("apiPercentUsed", "Other Models")
     // Older plans only report spend against the included amount.
     if limits.isEmpty, let spent = plan.number("includedSpend"), let limit = plan.number("limit"), limit > 0 {
       limits.append(UsageLimit(title: "Mensal", used: spent / limit, resetsAt: resets))

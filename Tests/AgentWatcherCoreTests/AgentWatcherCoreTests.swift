@@ -99,8 +99,8 @@ final class CursorParsingTests: XCTestCase {
     let raw = #"{"billingCycleStart":"1791982045000","billingCycleEnd":"1794660445000","planUsage":{"totalSpend":115072,"includedSpend":7000,"limit":7000,"autoPercentUsed":91.74,"apiPercentUsed":45.29,"totalPercentUsed":87.84},"enabled":true}"#
     let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? JSON)
     let limits = CursorProvider.parseLimits(payload)
-    XCTAssertEqual(limits.map(\.title), ["Mensal", "Auto + Composer", "API"])
-    XCTAssertEqual(limits[1].used, 0.9174, accuracy: 1e-6)
+    XCTAssertEqual(limits.map(\.title), ["Cursor Models", "Other Models"])
+    XCTAssertEqual(limits[0].used, 0.9174, accuracy: 1e-6)
     XCTAssertEqual(limits[0].resetsAt, Date(timeIntervalSince1970: 1794660445))
   }
 
