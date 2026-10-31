@@ -11,7 +11,7 @@ struct PanelView: View {
       header
 
       if store.usages.isEmpty {
-        Text(store.isRefreshing ? "Carregando…" : "Nenhum harness para mostrar.\nClaude Code e Codex aparecem aqui quando instalados e ativos nas configurações.")
+        Text(store.isRefreshing ? "Carregando…" : "Nenhum harness para mostrar.\nClaude Code, Codex e Cursor aparecem aqui quando instalados e ativos nas configurações.")
           .font(.callout)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)

@@ -94,6 +94,29 @@ final class CodexParsingTests: XCTestCase {
   }
 }
 
+final class CursorParsingTests: XCTestCase {
+  func testParsesPoolsFromRealJSON() throws {
+    let raw = #"{"billingCycleStart":"1791982045000","billingCycleEnd":"1794660445000","planUsage":{"totalSpend":115072,"includedSpend":7000,"limit":7000,"autoPercentUsed":91.74,"apiPercentUsed":45.29,"totalPercentUsed":87.84},"enabled":true}"#
+    let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? JSON)
+    let limits = CursorProvider.parseLimits(payload)
+    XCTAssertEqual(limits.map(\.title), ["Mensal", "Auto + Composer", "API"])
+    XCTAssertEqual(limits[1].used, 0.9174, accuracy: 1e-6)
+    XCTAssertEqual(limits[0].resetsAt, Date(timeIntervalSince1970: 1794660445))
+  }
+
+  func testFallsBackToIncludedSpend() {
+    let limits = CursorProvider.parseLimits(["planUsage": ["includedSpend": 1500, "limit": 2000] as JSON])
+    XCTAssertEqual(limits.map(\.title), ["Mensal"])
+    XCTAssertEqual(limits[0].used, 0.75, accuracy: 1e-9)
+  }
+
+  func testTokenExpiryFromJWT() {
+    let claims = Data(#"{"exp":1798152383}"#.utf8).base64EncodedString()
+      .replacingOccurrences(of: "=", with: "")
+    XCTAssertEqual(CursorProvider.expiry(of: "x.\(claims).y"), Date(timeIntervalSince1970: 1798152383))
+  }
+}
+
 struct FakeProvider: UsageProvider {
   let id: String
   let name: String

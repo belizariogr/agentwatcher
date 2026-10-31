@@ -1,7 +1,7 @@
 # Agent Watcher
 
 App de menu bar para macOS que mostra os limites de uso dos harnesses de IA
-instalados na máquina: **Claude Code** e **Codex**.
+instalados na máquina: **Claude Code**, **Codex** e **Cursor**.
 
 Inspirado no plugin `belizario.agents` do Omarchy (dotfiles), refeito
 nativamente em Swift/SwiftUI.
@@ -44,9 +44,15 @@ make icon PALETTE=aurora BG=claro && make run
 |---|---|---|
 | Claude Code | `GET https://api.anthropic.com/api/oauth/usage` | Token OAuth do CLI no Keychain (`Claude Code-credentials`), ou `$CLAUDE_CONFIG_DIR/.credentials.json` |
 | Codex | JSON-RPC `account/rateLimits/read` no `codex app-server` | O próprio CLI (`~/.codex/auth.json`, ou `$CODEX_HOME`) |
+| Cursor | `POST https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` (+ `GetPlanInfo`) | Token do Cursor CLI no Keychain (`cursor-access-token`), ou o login do editor (`state.vscdb`) |
 
-Nenhum token sai da máquina além do header da consulta à Anthropic. O token
-do Claude não é renovado pelo app: se expirar, abrir o Claude Code renova.
+Nenhum token sai da máquina além do header das consultas à Anthropic e ao
+Cursor. Os tokens não são renovados pelo app: se o do Claude expirar, abrir o
+Claude Code renova; o do Cursor, `cursor-agent login`.
+
+No Cursor, o uso incluído é mensal e dividido em dois pools: **Auto + Composer**
+e **API** (modelos escolhidos pelo nome). **Mensal** é o total que o Cursor
+reporta.
 Se uma atualização falhar (ex.: a Anthropic limitando consultas), o painel
 mantém os últimos números bons e mostra o aviso.
 
@@ -67,7 +73,7 @@ terminal:
 defaults write com.belizariogr.agentwatcher refreshInterval -int 600
 # Fração restante em que o ícone começa a mudar de cor (padrão 0.15)
 defaults write com.belizariogr.agentwatcher alertThreshold -float 0.2
-# Harnesses escondidos (ids: claude, codex)
+# Harnesses escondidos (ids: claude, codex, cursor)
 defaults write com.belizariogr.agentwatcher hiddenProviders -array codex
 ```
 

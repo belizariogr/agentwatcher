@@ -37,7 +37,7 @@ public final class UsageStore: ObservableObject {
     didSet { defaults.set(hiddenProviders.sorted(), forKey: Keys.hiddenProviders) }
   }
 
-  nonisolated public static let allProviders: [any UsageProvider] = [ClaudeProvider(), CodexProvider()]
+  nonisolated public static let allProviders: [any UsageProvider] = [ClaudeProvider(), CodexProvider(), CursorProvider()]
 
   public let providers: [any UsageProvider]
   private let defaults: UserDefaults
