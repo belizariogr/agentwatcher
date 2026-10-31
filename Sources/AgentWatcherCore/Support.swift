@@ -90,6 +90,16 @@ enum Shell {
     return String(data: data, encoding: .utf8)
   }
 
+  /// `run` off Swift's cooperative pool: these calls block (a Keychain
+  /// prompt can hold `security` for seconds) and must not starve other tasks.
+  static func output(_ executable: String, _ arguments: [String], timeout: TimeInterval = 10) async -> String? {
+    await withCheckedContinuation { continuation in
+      DispatchQueue.global(qos: .utility).async {
+        continuation.resume(returning: run(executable, arguments, timeout: timeout))
+      }
+    }
+  }
+
   static func readJSON(_ url: URL) -> JSON? {
     guard let data = try? Data(contentsOf: url) else { return nil }
     return (try? JSONSerialization.jsonObject(with: data)) as? JSON

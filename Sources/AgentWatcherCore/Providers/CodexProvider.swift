@@ -8,13 +8,6 @@ public struct CodexProvider: UsageProvider {
 
   public init() {}
 
-  var codexHome: URL {
-    if let custom = ProcessInfo.processInfo.environment["CODEX_HOME"], !custom.isEmpty {
-      return URL(fileURLWithPath: NSString(string: custom).expandingTildeInPath)
-    }
-    return Shell.home.appendingPathComponent(".codex")
-  }
-
   public func isInstalled() -> Bool {
     Shell.which("codex") != nil
   }
@@ -25,12 +18,8 @@ public struct CodexProvider: UsageProvider {
       usage.message = "`codex` CLI not found."
       return usage
     }
-    guard FileManager.default.fileExists(atPath: codexHome.appendingPathComponent("auth.json").path) else {
-      usage.message = "Not logged in. Run `codex login` to see limits."
-      usage.needsLogin = true
-      return usage
-    }
-
+    // No auth.json check: Codex can keep its login in the system keyring, so
+    // the app-server's answer is the only reliable signal.
     let response: JSON
     do {
       response = try await Self.readRateLimits(binary: binary)
@@ -40,8 +29,7 @@ public struct CodexProvider: UsageProvider {
     }
     if let error = response.object("error") {
       let text = error.string("message") ?? ""
-      usage.needsLogin = text.localizedCaseInsensitiveContains("chatgpt") || text.localizedCaseInsensitiveContains("auth")
-        || text.localizedCaseInsensitiveContains("login") || text.localizedCaseInsensitiveContains("token")
+      usage.needsLogin = Self.isLoginError(text)
       usage.message = usage.needsLogin
         ? "Not logged in with ChatGPT. Run `codex login` to see limits."
         : "Codex: \(text.isEmpty ? "could not read limits" : text)"
@@ -54,6 +42,16 @@ public struct CodexProvider: UsageProvider {
     usage.fetchedAt = Date()
     if usage.limits.isEmpty { usage.message = "Codex returned no limits." }
     return usage
+  }
+
+  /// Only explicit authentication failures count as a lost login; anything
+  /// else (backend down, rate limits, URLs that mention chatgpt.com) keeps the
+  /// last known numbers. The app-server says e.g. "codex account
+  /// authentication required to read rate limits".
+  static func isLoginError(_ text: String) -> Bool {
+    let lower = text.lowercased()
+    return ["authentication required", "not logged in", "login required", "not authenticated",
+            "unauthorized", "please log in", "please login", "sign in again"].contains { lower.contains($0) }
   }
 
   // MARK: - Parsing
@@ -78,7 +76,9 @@ public struct CodexProvider: UsageProvider {
         guard let window = bucket.object(key), let used = window.number("usedPercent") else { continue }
         let minutes = Int(window.number("windowDurationMins") ?? 0)
         let span = windowTitle(minutes)
-        let title = general ? span : "\(bucketName) · \(span)"
+        var title = general ? span : "\(bucketName) · \(span)"
+        // Titles are the rows' identity in the panel; keep them unique.
+        if limits.contains(where: { $0.title == title }) { title += " (\(key))" }
         limits.append(UsageLimit(title: title, used: used / 100, resetsAt: Dates.parse(window["resetsAt"])))
       }
     }
@@ -93,7 +93,7 @@ public struct CodexProvider: UsageProvider {
     if minutes == 7 * 24 * 60 { return "Weekly" }
     if minutes >= 24 * 60 { return "\(minutes / (24 * 60))d" }
     if minutes > 0 { return minutes % 60 == 0 ? "Session (\(minutes / 60)h)" : "Session (\(minutes)m)" }
-    return "Limite"
+    return "Limit"
   }
 
   static func planLabel(_ raw: String) -> String {

@@ -98,13 +98,22 @@ struct ProviderCard: View {
         Spacer()
       }
 
-      if let message = usage.message {
-        Label(LocalizedStringKey(message), systemImage: usage.needsLogin ? "person.crop.circle.badge.xmark" : "exclamationmark.triangle")
+      // A rate limit is routine: keep showing the last numbers, no warning.
+      if usage.rateLimited {
+        if usage.limits.isEmpty {
+          Text("Waiting for data…").font(.caption).foregroundStyle(.secondary)
+        }
+      } else if let message = usage.message {
+        Label {
+          Text(Self.styled(message))
+        } icon: {
+          Image(systemName: usage.needsLogin ? "person.crop.circle.badge.xmark" : "exclamationmark.triangle")
+        }
           .font(.caption)
           .foregroundStyle(usage.needsLogin ? Color.red : Color.orange)
           .fixedSize(horizontal: false, vertical: true)
       }
-      if usage.message != nil, !usage.limits.isEmpty, let fetchedAt = usage.fetchedAt {
+      if usage.message != nil, !usage.rateLimited, !usage.limits.isEmpty, let fetchedAt = usage.fetchedAt {
         TimelineView(.periodic(from: .now, by: 30)) { _ in
           Text("Last known values, from \(fetchedAt, format: .relative(presentation: .named))")
             .font(.caption)
@@ -121,6 +130,20 @@ struct ProviderCard: View {
     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
   }
 
+}
+
+extension ProviderCard {
+  /// `code` spans in monospace, everything else verbatim. Not Markdown: the
+  /// message can carry server text, which must not turn into links.
+  static func styled(_ message: String) -> AttributedString {
+    var result = AttributedString()
+    for (index, part) in message.split(separator: "`", omittingEmptySubsequences: false).enumerated() {
+      var piece = AttributedString(String(part))
+      if index % 2 == 1 { piece.font = .caption.monospaced() }
+      result += piece
+    }
+    return result
+  }
 }
 
 struct ProviderLogo: View {

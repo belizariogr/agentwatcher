@@ -81,8 +81,9 @@ Code renews it; for Cursor, run `cursor-agent login`.
 Cursor's included usage is monthly and split into two pools: **Cursor Models**
 (Auto + Composer) and **Other Models** (third-party models picked by name).
 
-If a refresh fails (e.g. Anthropic rate limiting, or the network), the panel
-keeps the last known numbers, says how old they are and shows a warning. Every
+If a refresh fails, the panel keeps the last known numbers. A rate limit
+(Anthropic limits the usage endpoint readily) is routine and shown silently;
+other failures (e.g. the network) add a warning and how old the numbers are. Every
 check is saved to `~/Library/Application Support/AgentWatcher/usage.json`, so
 the last known numbers survive a relaunch too. A missing, expired or rejected
 login is different: the old numbers are dropped and the harness shows that it

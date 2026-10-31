@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!--
+    Finder desktop volume icon: White Drive (macOS Tahoe) by cheezton,
+    https://macosicons.com/icon/white-drive-macos-tahoe-kfAbSZoEDB
+    (same drive as the BGDesk DMG) with the Agent Watcher icon on the disk face.
+    app-icon.png is rendered from design/AppIcon.svg by scripts/make-dmg-assets.sh.
+  -->
+  <defs>
+    <filter id="badge-shadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="3" stdDeviation="4" flood-color="#6b7785" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <image href="white-drive-tahoe.png" xlink:href="white-drive-tahoe.png" width="1024" height="1024"/>
+  <!-- AppIcon.svg keeps a 100/1024 margin: 440px puts the ~354px tile where the BGDesk badge sat. -->
+  <image href="app-icon.png" xlink:href="app-icon.png" x="292" y="272" width="440" height="440" filter="url(#badge-shadow)"/>
+</svg>

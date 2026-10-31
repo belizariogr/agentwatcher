@@ -29,9 +29,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       )
     )
 
-    // objectWillChange fires before the new values land; read them a turn later.
+    // objectWillChange fires before the new values land; read them a turn
+    // later. The main queue (unlike RunLoop.main's default mode) also runs
+    // while a menu is tracking, so the icon never lags behind.
     store.objectWillChange
-      .receive(on: RunLoop.main)
+      .receive(on: DispatchQueue.main)
       .sink { [weak self] _ in self?.updateIcon() }
       .store(in: &cancellables)
 
@@ -119,7 +121,8 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
   let dir = URL(fileURLWithPath: CommandLine.arguments.count > flag + 1 ? CommandLine.arguments[flag + 1] : ".")
   try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
   MainActor.assumeIsolated {
-    let store = UsageStore()
+    // A debug render must not overwrite the app's cache of last known values.
+    let store = UsageStore(cacheURL: nil)
     store.refresh()
     while store.isRefreshing || store.lastRefresh == nil {
       RunLoop.main.run(until: Date().addingTimeInterval(0.1))

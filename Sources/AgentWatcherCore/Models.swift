@@ -41,8 +41,11 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
   /// rate limit or a network error, old numbers are not kept: they belong to
   /// a session that is gone.
   public var needsLogin: Bool
+  /// The endpoint asked us to slow down. Routine (Anthropic rate-limits the
+  /// usage endpoint readily), so the panel keeps the last numbers silently.
+  public var rateLimited: Bool
 
-  public init(id: String, name: String, plan: String? = nil, limits: [UsageLimit] = [], message: String? = nil, fetchedAt: Date? = nil, needsLogin: Bool = false) {
+  public init(id: String, name: String, plan: String? = nil, limits: [UsageLimit] = [], message: String? = nil, fetchedAt: Date? = nil, needsLogin: Bool = false, rateLimited: Bool = false) {
     self.id = id
     self.name = name
     self.plan = plan
@@ -50,9 +53,10 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
     self.message = message
     self.fetchedAt = fetchedAt
     self.needsLogin = needsLogin
+    self.rateLimited = rateLimited
   }
 
-  enum CodingKeys: String, CodingKey { case id, name, plan, limits, message, fetchedAt, needsLogin }
+  enum CodingKeys: String, CodingKey { case id, name, plan, limits, message, fetchedAt, needsLogin, rateLimited }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -63,6 +67,7 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
     message = try c.decodeIfPresent(String.self, forKey: .message)
     fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
     needsLogin = try c.decodeIfPresent(Bool.self, forKey: .needsLogin) ?? false
+    rateLimited = try c.decodeIfPresent(Bool.self, forKey: .rateLimited) ?? false
   }
 
   /// The window with the least room left.

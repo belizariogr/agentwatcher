@@ -18,3 +18,6 @@ done
 iconutil -c icns "$ICONSET" -o Resources/AppIcon.icns
 rm -rf "$(dirname "$ICONSET")"
 echo "Resources/AppIcon.icns ($PALETTE, $BACKGROUND)"
+
+# The DMG volume icon embeds the app icon.
+./scripts/make-dmg-assets.sh

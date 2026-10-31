@@ -23,20 +23,30 @@ public struct CursorProvider: UsageProvider {
       || Shell.which("cursor-agent") != nil
   }
 
-  /// The CLI's Keychain item first (written by `/usr/bin/security`, so reading
-  /// it the same way never prompts), then the editor's login.
-  func accessToken() -> String? {
-    if let raw = Shell.run("/usr/bin/security", ["find-generic-password", "-s", Self.keychainService, "-w"]) {
-      let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !token.isEmpty { return token }
+  /// Every login on the machine: the CLI's Keychain item (written by
+  /// `/usr/bin/security`, so reading it the same way never prompts) and the
+  /// editor's. Unexpired ones first, so a stale CLI login left behind does not
+  /// hide a working editor login.
+  func accessTokens() async -> [String] {
+    var tokens: [String] = []
+    if let raw = await Shell.output("/usr/bin/security", ["find-generic-password", "-s", Self.keychainService, "-w"]) {
+      tokens.append(raw.trimmingCharacters(in: .whitespacesAndNewlines))
     }
-    guard FileManager.default.fileExists(atPath: Self.editorState.path),
-          let raw = Shell.run("/usr/bin/sqlite3", [
-            "-readonly", Self.editorState.path,
-            "select value from ItemTable where key = 'cursorAuth/accessToken'",
-          ]) else { return nil }
-    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-    return token.isEmpty ? nil : token
+    if FileManager.default.fileExists(atPath: Self.editorState.path),
+       let raw = await Shell.output("/usr/bin/sqlite3", [
+         "-readonly", Self.editorState.path,
+         "select value from ItemTable where key = 'cursorAuth/accessToken'",
+       ]) {
+      tokens.append(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+    return Self.ordered(tokens)
+  }
+
+  static func ordered(_ tokens: [String], now: Date = Date()) -> [String] {
+    var unique: [String] = []
+    for token in tokens where !token.isEmpty && !unique.contains(token) { unique.append(token) }
+    let expired = { (token: String) in expiry(of: token).map { $0 <= now } ?? false }
+    return unique.filter { !expired($0) } + unique.filter(expired)
   }
 
   /// Cursor session tokens are JWTs; `exp` tells an expired login apart from
@@ -70,34 +80,43 @@ public struct CursorProvider: UsageProvider {
 
   public func fetch() async -> ProviderUsage {
     var usage = ProviderUsage(id: id, name: name)
-    guard let token = accessToken() else {
+    let tokens = await accessTokens()
+    guard !tokens.isEmpty else {
       usage.message = "Not logged in. Run `cursor-agent login` (or sign in to Cursor) to see limits."
       usage.needsLogin = true
       return usage
     }
 
-    async let planInfo = try? call("GetPlanInfo", token: token)
-    do {
-      let payload = try await call("GetCurrentPeriodUsage", token: token)
-      usage.limits = Self.parseLimits(payload)
-      usage.fetchedAt = Date()
-      if usage.limits.isEmpty { usage.message = "Cursor returned no limits." }
-    } catch CallError.status(let status) where status == 401 || status == 403 {
-      let expired = Self.expiry(of: token).map { $0 < Date() } ?? false
-      usage.needsLogin = true
-      usage.message = expired
-        ? "Cursor login expired. Run `cursor-agent login`."
-        : "Cursor rejected the login. Run `cursor-agent login`."
-    } catch CallError.status(429) {
-      usage.message = "Cursor is rate limiting; will retry later."
-    } catch CallError.status(let status) {
-      usage.message = "Cursor answered HTTP \(status)."
-    } catch CallError.invalid {
-      usage.message = "Invalid response from Cursor."
-    } catch {
-      usage.message = "Could not reach Cursor."
+    for token in tokens {
+      async let planInfo = try? call("GetPlanInfo", token: token)
+      do {
+        let payload = try await call("GetCurrentPeriodUsage", token: token)
+        usage.limits = Self.parseLimits(payload)
+        usage.fetchedAt = Date()
+        if usage.limits.isEmpty { usage.message = "Cursor returned no limits." }
+        usage.plan = await planInfo?.object("planInfo")?.string("planName")
+        return usage
+      } catch CallError.status(let status) where status == 401 || status == 403 {
+        continue // try the next login
+      } catch CallError.status(429) {
+        usage.message = "Cursor is rate limiting; will retry later."
+        usage.rateLimited = true
+      } catch CallError.status(let status) {
+        usage.message = "Cursor answered HTTP \(status)."
+      } catch CallError.invalid {
+        usage.message = "Invalid response from Cursor."
+      } catch {
+        usage.message = "Could not reach Cursor."
+      }
+      return usage
     }
-    usage.plan = await planInfo?.object("planInfo")?.string("planName")
+
+    // Every login was refused.
+    let expired = tokens.allSatisfy { Self.expiry(of: $0).map { $0 <= Date() } ?? false }
+    usage.needsLogin = true
+    usage.message = expired
+      ? "Cursor login expired. Run `cursor-agent login`."
+      : "Cursor rejected the login. Run `cursor-agent login`."
     return usage
   }
 

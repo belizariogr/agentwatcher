@@ -260,3 +260,41 @@ final class LoggedOutTests: XCTestCase {
     XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.used, 0.5)
   }
 }
+
+final class ReviewFixTests: XCTestCase {
+  func testOnlyExplicitAuthErrorsMeanLoggedOut() {
+    XCTAssertTrue(CodexProvider.isLoginError("codex account authentication required to read rate limits"))
+    XCTAssertTrue(CodexProvider.isLoginError("401 Unauthorized"))
+    XCTAssertFalse(CodexProvider.isLoginError("request to https://chatgpt.com/backend-api/wham/usage failed: 503"))
+    XCTAssertFalse(CodexProvider.isLoginError("too many tokens; rate limited"))
+    XCTAssertFalse(CodexProvider.isLoginError("authorization server unavailable"))
+  }
+
+  func testCodexWindowsWithoutDurationGetUniqueTitles() {
+    let parsed = CodexProvider.parse(["rateLimits": [
+      "primary": ["usedPercent": 10] as JSON,
+      "secondary": ["usedPercent": 20] as JSON,
+    ] as JSON])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Limit", "Limit (secondary)"])
+  }
+
+  func testCursorTriesUnexpiredLoginsFirst() {
+    func jwt(_ exp: Int) -> String {
+      "h." + Data(#"{"exp":\#(exp)}"#.utf8).base64EncodedString().replacingOccurrences(of: "=", with: "") + ".s"
+    }
+    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let stale = jwt(1_700_000_000), fresh = jwt(1_900_000_000)
+    XCTAssertEqual(CursorProvider.ordered([stale, fresh, fresh, ""], now: now), [fresh, stale])
+    XCTAssertEqual(CursorProvider.ordered(["opaque", stale], now: now), ["opaque", stale])
+  }
+}
+
+final class RateLimitTests: XCTestCase {
+  func testRateLimitedRefreshKeepsNumbersAndFlag() {
+    let old = ProviderUsage(id: "c", name: "C", limits: [UsageLimit(title: "w", used: 0.4, resetsAt: nil)], fetchedAt: Date())
+    let limited = ProviderUsage(id: "c", name: "C", message: "slow down", rateLimited: true)
+    let merged = limited.merged(withPrevious: old)
+    XCTAssertEqual(merged.limits, old.limits)
+    XCTAssertTrue(merged.rateLimited)
+  }
+}

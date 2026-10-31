@@ -66,19 +66,31 @@ struct SettingsView: View {
   }
 }
 
-/// Only meaningful when running from the .app bundle.
+/// Only meaningful when running from the .app bundle. The status is read
+/// from the system each time, so changes made in System Settings show up and a
+/// failed change snaps back without another register/unregister round.
 struct LaunchAtLoginToggle: View {
-  @State private var enabled = SMAppService.mainApp.status == .enabled
+  @State private var status = SMAppService.mainApp.status
 
   var body: some View {
-    Toggle("Launch at login", isOn: $enabled)
-      .onChange(of: enabled) { _, wanted in
-        do {
-          if wanted { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-          enabled = SMAppService.mainApp.status == .enabled
+    VStack(alignment: .leading, spacing: 2) {
+      Toggle("Launch at login", isOn: Binding(
+        get: { status == .enabled || status == .requiresApproval },
+        set: { wanted in
+          try? wanted ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+          status = SMAppService.mainApp.status
         }
+      ))
+      if status == .requiresApproval {
+        Text("Allow Agent Watcher in System Settings › General › Login Items.")
+          .font(.caption)
+          .foregroundStyle(.secondary)
       }
+    }
+    .onAppear { status = SMAppService.mainApp.status }
+    .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+      status = SMAppService.mainApp.status
+    }
   }
 }
 

@@ -29,9 +29,12 @@ jobs:
           fetch-depth: 0 # version from tags, build number from the commit count
           persist-credentials: false
 
-      - name: Select Xcode
+      - name: Select the newest stable Xcode
         run: |
-          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc|release.candidate' | sort -V | tail -1)"
+          [[ -n "$xcode" ]] || { echo "::error::no stable Xcode on this runner"; exit 1; }
+          sudo xcode-select -s "$xcode"
+          echo "Using $xcode"
           swift --version
 
       - name: Test

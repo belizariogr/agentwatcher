@@ -1,0 +1,9 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+<defs><linearGradient id="a3bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#14b8a6"/><stop offset="1" stop-color="#1e3a8a"/></linearGradient>
+<linearGradient id="a3shine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".18"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<filter id="a3sh" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-opacity=".35"/></filter>
+<linearGradient id="a3iris" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fbbf24"/><stop offset="1" stop-color="#f43f5e"/></linearGradient></defs>
+<g filter="url(#a3sh)"><rect x="100" y="100" width="824" height="824" rx="185" fill="url(#a3bg)"/></g><path d="M200 512 C330 300 694 300 824 512 C694 724 330 724 200 512Z" fill="#fff"/>
+ <circle cx="512" cy="512" r="150" fill="none" stroke="#e2e8f0" stroke-width="40"/>
+ <path d="M512.00 362.00 A150 150 0 1 1 382.10 437.00" fill="none" stroke="url(#a3iris)" stroke-width="40" stroke-linecap="round"/>
+ <circle cx="512" cy="512" r="78" fill="#0f172a"/><circle cx="540" cy="482" r="22" fill="#fff"/><rect x="100" y="100" width="824" height="824" rx="185" fill="url(#a3shine)"/></svg>

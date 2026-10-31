@@ -31,9 +31,9 @@ public struct ClaudeProvider: UsageProvider {
 
   /// The CLI writes its Keychain item through `/usr/bin/security`, so asking
   /// the same tool keeps macOS from prompting for access on every read.
-  func login() -> Login? {
+  func login() async -> Login? {
     var oauth: JSON?
-    if let raw = Shell.run("/usr/bin/security", ["find-generic-password", "-s", Self.keychainService, "-w"]),
+    if let raw = await Shell.output("/usr/bin/security", ["find-generic-password", "-s", Self.keychainService, "-w"]),
        let data = raw.trimmingCharacters(in: .whitespacesAndNewlines).data(using: .utf8),
        let json = (try? JSONSerialization.jsonObject(with: data)) as? JSON {
       oauth = json.object("claudeAiOauth")
@@ -71,7 +71,7 @@ public struct ClaudeProvider: UsageProvider {
 
   public func fetch() async -> ProviderUsage {
     var usage = ProviderUsage(id: id, name: name)
-    guard let login = login() else {
+    guard let login = await login() else {
       usage.message = "Not logged in. Run `claude` and log in to see limits."
       usage.needsLogin = true
       return usage
@@ -103,6 +103,7 @@ public struct ClaudeProvider: UsageProvider {
           : "Anthropic rejected the login. Run `claude auth login`."
       case 429:
         usage.message = "Usage endpoint is rate limiting; will retry later."
+        usage.rateLimited = true
       default:
         usage.message = "Usage endpoint answered HTTP \(status)."
       }

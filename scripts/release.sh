@@ -12,6 +12,8 @@
 #   MACOS_NOTARY_APPLE_ID + MACOS_NOTARY_PASSWORD (app-specific password), or
 #   MACOS_NOTARY_PROFILE                  a `notarytool store-credentials` profile.
 #   SKIP_NOTARIZE=1                       sign only (quick local check).
+#   DMGBUILD                              optional path to a dmgbuild to use instead
+#                                         of the hash-pinned one in build/.venv.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -27,11 +29,30 @@ fail() { echo "release: $*" >&2; exit 1; }
 TEAM_ID="${MACOS_TEAM_ID:-3Z7C3Q7NMT}"
 [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || fail "invalid MACOS_TEAM_ID"
 
+# --- dmgbuild, before any credential is loaded ------------------------------
+# Hash-pinned (scripts/dmg-requirements.txt): third-party code must not run
+# next to an unlocked signing keychain unless it is exactly what was reviewed.
+if [[ -n "${DMGBUILD:-}" ]]; then
+  "$DMGBUILD" --help >/dev/null 2>&1 || fail "DMGBUILD is set but does not run: $DMGBUILD"
+  dmgbuild="$DMGBUILD"
+else
+  dmgbuild="build/.venv/bin/dmgbuild"
+  if ! "$dmgbuild" --help >/dev/null 2>&1; then
+    command -v python3 >/dev/null || fail "python3 is needed to install dmgbuild"
+    rm -rf build/.venv
+    python3 -m venv build/.venv || fail "could not create build/.venv"
+    build/.venv/bin/pip install --quiet --disable-pip-version-check --require-hashes --only-binary :all: \
+      -r scripts/dmg-requirements.txt || fail "could not install dmgbuild"
+  fi
+fi
+
 # --- Temporary keychain for a .p12 (never touches the login keychain) -------
 tmp_dir=""
 keychain=""
+mount=""
 original_keychains=()
 cleanup() {
+  [[ -z "$mount" ]] || hdiutil detach "$mount" -quiet -force >/dev/null 2>&1 || true
   if [[ -n "$keychain" ]]; then
     security list-keychains -d user -s ${original_keychains[@]+"${original_keychains[@]}"} >/dev/null 2>&1 || true
     security delete-keychain "$keychain" >/dev/null 2>&1 || true
@@ -98,17 +119,33 @@ requirement="=anchor apple generic and certificate leaf[subject.OU] = \"$TEAM_ID
 codesign --verify --strict -R "$requirement" "$APP" || fail "app is not signed with a Developer ID of $TEAM_ID"
 
 # --- DMG ----------------------------------------------------------------------
+# Installer window with the BGDesk artwork (Resources/dmg, scripts/dmg-settings.py).
 DMG="build/AgentWatcher-$VERSION.dmg"
-stage="$tmp_dir/dmg"
-mkdir -p "$stage"
-cp -R "$APP" "$stage/"
-ln -s /Applications "$stage/Applications"
 rm -f "$DMG"
-hdiutil create -quiet -volname "Agent Watcher" -srcfolder "$stage" -fs HFS+ -format UDZO -ov "$DMG"
+"$dmgbuild" -s scripts/dmg-settings.py -D app="$APP" "Agent Watcher" "$DMG"
 codesign "${sign_args[@]}" --identifier com.belizariogr.agentwatcher.dmg "$DMG"
+
+# Check the image as a user gets it: the app must be there, intact and signed
+# (dmgbuild does not fail when copying the app fails). With notarized=1 the
+# app must also pass Gatekeeper.
+check_dmg() {
+  mount="$tmp_dir/mount"
+  mkdir -p "$mount"
+  hdiutil attach -readonly -nobrowse -quiet -mountpoint "$mount" "$DMG" || fail "could not mount $DMG"
+  local app="$mount/AgentWatcher.app"
+  [[ -d "$app" ]] || fail "AgentWatcher.app is missing from the DMG"
+  [[ -L "$mount/Applications" ]] || fail "Applications link is missing from the DMG"
+  codesign --verify --deep --strict -R "$requirement" "$app" || fail "the app in the DMG is not intact"
+  if [[ "${1:-}" == "notarized" ]]; then
+    spctl --assess --type execute --verbose=2 "$app" || fail "Gatekeeper rejected the app"
+  fi
+  hdiutil detach "$mount" -quiet
+  mount=""
+}
 
 # --- Notarize and staple ------------------------------------------------------
 if [[ "${SKIP_NOTARIZE:-0}" == "1" ]]; then
+  check_dmg
   echo "release: signed, NOT notarized (SKIP_NOTARIZE=1): $DMG"
   exit 0
 fi
@@ -130,12 +167,7 @@ done
 xcrun stapler validate "$DMG"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG"
 
-# Gatekeeper check of the app as a user would get it from the DMG.
-mount="$tmp_dir/mount"
-mkdir -p "$mount"
-hdiutil attach -readonly -nobrowse -quiet -mountpoint "$mount" "$DMG"
-spctl --assess --type execute --verbose=2 "$mount/AgentWatcher.app" || { hdiutil detach "$mount" -quiet; fail "Gatekeeper rejected the app"; }
-hdiutil detach "$mount" -quiet
+check_dmg notarized
 
 shasum -a 256 "$DMG"
 echo "release: $DMG"

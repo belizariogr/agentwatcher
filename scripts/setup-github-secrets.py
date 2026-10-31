@@ -41,14 +41,16 @@ def main():
     if env_file is None:
         raise SystemExit("No .env found; pass --env-file")
     values = {**dotenv(env_file), **{k: v for k, v in os.environ.items() if k.startswith("MACOS_")}}
-    print(f"Reading {env_file}")
+    print(f"Reading {env_file}" + ("" if args.env_file or env_file.parent == ROOT else "  (fallback: no ./.env here)"))
 
     secrets = {}
     for name in ("MACOS_P12_PASSWORD", "MACOS_CODESIGN_IDENTITY", "MACOS_TEAM_ID",
                  "MACOS_NOTARY_APPLE_ID", "MACOS_NOTARY_PASSWORD"):
         if values.get(name):
             secrets[name] = values[name]
-    if values.get("MACOS_P12_FILE"):
+    if values.get("MACOS_P12_BASE64"):
+        secrets["MACOS_P12_BASE64"] = values["MACOS_P12_BASE64"]
+    elif values.get("MACOS_P12_FILE"):
         p12 = Path(values["MACOS_P12_FILE"]).expanduser()
         if not p12.is_file():
             raise SystemExit(f"MACOS_P12_FILE not found: {p12}")
