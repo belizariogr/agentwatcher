@@ -72,6 +72,7 @@ public struct CursorProvider: UsageProvider {
     var usage = ProviderUsage(id: id, name: name)
     guard let token = accessToken() else {
       usage.message = "Not logged in. Run `cursor-agent login` (or sign in to Cursor) to see limits."
+      usage.needsLogin = true
       return usage
     }
 
@@ -83,6 +84,7 @@ public struct CursorProvider: UsageProvider {
       if usage.limits.isEmpty { usage.message = "Cursor returned no limits." }
     } catch CallError.status(let status) where status == 401 || status == 403 {
       let expired = Self.expiry(of: token).map { $0 < Date() } ?? false
+      usage.needsLogin = true
       usage.message = expired
         ? "Cursor login expired. Run `cursor-agent login`."
         : "Cursor rejected the login. Run `cursor-agent login`."

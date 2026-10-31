@@ -99,10 +99,17 @@ struct ProviderCard: View {
       }
 
       if let message = usage.message {
-        Label(message, systemImage: "exclamationmark.triangle")
+        Label(LocalizedStringKey(message), systemImage: usage.needsLogin ? "person.crop.circle.badge.xmark" : "exclamationmark.triangle")
           .font(.caption)
-          .foregroundStyle(.orange)
+          .foregroundStyle(usage.needsLogin ? Color.red : Color.orange)
           .fixedSize(horizontal: false, vertical: true)
+      }
+      if usage.message != nil, !usage.limits.isEmpty, let fetchedAt = usage.fetchedAt {
+        TimelineView(.periodic(from: .now, by: 30)) { _ in
+          Text("Last known values, from \(fetchedAt, format: .relative(presentation: .named))")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
       }
 
       ForEach(usage.limits) { limit in

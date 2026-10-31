@@ -2,7 +2,7 @@ import Foundation
 
 /// One rate-limit window of a harness: a 5-hour session, a week, a model's
 /// own allowance, a spend cap.
-public struct UsageLimit: Identifiable, Equatable, Sendable {
+public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
   public var id: String { title }
   public let title: String
   /// Share of the allowance already used, 0...1.
@@ -28,7 +28,7 @@ public struct UsageLimit: Identifiable, Equatable, Sendable {
 }
 
 /// Everything the panel shows for one harness.
-public struct ProviderUsage: Identifiable, Equatable, Sendable {
+public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
   public let id: String
   public let name: String
   public var plan: String?
@@ -37,14 +37,32 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable {
   public var message: String?
   /// When `limits` were measured.
   public var fetchedAt: Date?
+  /// The harness has no usable login (missing, expired or rejected). Unlike a
+  /// rate limit or a network error, old numbers are not kept: they belong to
+  /// a session that is gone.
+  public var needsLogin: Bool
 
-  public init(id: String, name: String, plan: String? = nil, limits: [UsageLimit] = [], message: String? = nil, fetchedAt: Date? = nil) {
+  public init(id: String, name: String, plan: String? = nil, limits: [UsageLimit] = [], message: String? = nil, fetchedAt: Date? = nil, needsLogin: Bool = false) {
     self.id = id
     self.name = name
     self.plan = plan
     self.limits = limits
     self.message = message
     self.fetchedAt = fetchedAt
+    self.needsLogin = needsLogin
+  }
+
+  enum CodingKeys: String, CodingKey { case id, name, plan, limits, message, fetchedAt, needsLogin }
+
+  public init(from decoder: Decoder) throws {
+    let c = try decoder.container(keyedBy: CodingKeys.self)
+    id = try c.decode(String.self, forKey: .id)
+    name = try c.decode(String.self, forKey: .name)
+    plan = try c.decodeIfPresent(String.self, forKey: .plan)
+    limits = try c.decodeIfPresent([UsageLimit].self, forKey: .limits) ?? []
+    message = try c.decodeIfPresent(String.self, forKey: .message)
+    fetchedAt = try c.decodeIfPresent(Date.self, forKey: .fetchedAt)
+    needsLogin = try c.decodeIfPresent(Bool.self, forKey: .needsLogin) ?? false
   }
 
   /// The window with the least room left.
@@ -53,9 +71,10 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable {
   }
 
   /// Keep the last good numbers when a refresh fails (the Claude endpoint
-  /// rate-limits readily), but surface why they are not fresh.
+  /// rate-limits readily), but surface why they are not fresh. A lost login
+  /// drops them instead.
   public func merged(withPrevious previous: ProviderUsage?) -> ProviderUsage {
-    guard limits.isEmpty, let previous, !previous.limits.isEmpty else { return self }
+    guard limits.isEmpty, !needsLogin, let previous, !previous.limits.isEmpty else { return self }
     var copy = self
     copy.limits = previous.limits
     copy.fetchedAt = previous.fetchedAt

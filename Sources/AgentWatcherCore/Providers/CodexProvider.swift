@@ -27,6 +27,7 @@ public struct CodexProvider: UsageProvider {
     }
     guard FileManager.default.fileExists(atPath: codexHome.appendingPathComponent("auth.json").path) else {
       usage.message = "Not logged in. Run `codex login` to see limits."
+      usage.needsLogin = true
       return usage
     }
 
@@ -39,8 +40,10 @@ public struct CodexProvider: UsageProvider {
     }
     if let error = response.object("error") {
       let text = error.string("message") ?? ""
-      usage.message = text.localizedCaseInsensitiveContains("chatgpt") || text.localizedCaseInsensitiveContains("auth")
-        ? "Limits only exist with a ChatGPT login (`codex login`)."
+      usage.needsLogin = text.localizedCaseInsensitiveContains("chatgpt") || text.localizedCaseInsensitiveContains("auth")
+        || text.localizedCaseInsensitiveContains("login") || text.localizedCaseInsensitiveContains("token")
+      usage.message = usage.needsLogin
+        ? "Not logged in with ChatGPT. Run `codex login` to see limits."
         : "Codex: \(text.isEmpty ? "could not read limits" : text)"
       return usage
     }

@@ -39,6 +39,12 @@ final class AlertTests: XCTestCase {
     XCTAssertEqual(merged.message, "429")
     XCTAssertEqual(merged.plan, "Max")
   }
+
+  func testLostLoginDropsLastKnownLimits() {
+    let old = ProviderUsage(id: "c", name: "C", plan: "Max", limits: [UsageLimit(title: "w", used: 0.4, resetsAt: nil)], fetchedAt: Date())
+    let loggedOut = ProviderUsage(id: "c", name: "C", message: "Not logged in", needsLogin: true)
+    XCTAssertEqual(loggedOut.merged(withPrevious: old), loggedOut)
+  }
 }
 
 final class ClaudeParsingTests: XCTestCase {
@@ -135,7 +141,7 @@ final class StoreSettingsTests: XCTestCase {
     let store = UsageStore(providers: [
       FakeProvider(id: "a", name: "A", used: 0.2),
       FakeProvider(id: "b", name: "B", used: 0.95),
-    ], defaults: defaults)
+    ], defaults: defaults, cacheURL: nil)
     return (store, defaults)
   }
 
@@ -162,8 +168,95 @@ final class StoreSettingsTests: XCTestCase {
     let (store, defaults) = makeStore("aw.test.persist")
     store.refreshInterval = 600
     store.alertThreshold = 0.25
-    let reloaded = UsageStore(providers: [], defaults: defaults)
+    let reloaded = UsageStore(providers: [], defaults: defaults, cacheURL: nil)
     XCTAssertEqual(reloaded.refreshInterval, 600)
     XCTAssertEqual(reloaded.alertThreshold, 0.25)
+  }
+}
+
+struct RateLimitedProvider: UsageProvider {
+  let id: String
+  let name: String
+  func isInstalled() -> Bool { true }
+  func fetch() async -> ProviderUsage { ProviderUsage(id: id, name: name, message: "rate limited") }
+}
+
+@MainActor
+final class UsageCacheTests: XCTestCase {
+  func tempURL() -> URL {
+    FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString)/usage.json")
+  }
+
+  func waitForRefresh(_ store: UsageStore) async {
+    while store.isRefreshing || store.lastRefresh == nil { try? await Task.sleep(nanoseconds: 10_000_000) }
+  }
+
+  func testEveryRefreshIsSavedToDisk() async {
+    let url = tempURL()
+    let store = UsageStore(providers: [FakeProvider(id: "a", name: "A", used: 0.3)], defaults: .init(suiteName: "aw.test.cache1")!, cacheURL: url)
+    store.refresh()
+    await waitForRefresh(store)
+    let saved = UsageCache(url: url).load()
+    XCTAssertEqual(saved.map(\.id), ["a"])
+    XCTAssertEqual(saved.first?.limits.first?.used, 0.3)
+  }
+
+  func testRateLimitAfterRelaunchKeepsLastKnownValues() async {
+    let url = tempURL()
+    let resets = Date(timeIntervalSince1970: 1_900_000_000)
+    let measured = Date(timeIntervalSince1970: 1_800_000_000)
+    UsageCache(url: url).save([
+      ProviderUsage(id: "a", name: "A", plan: "Max", limits: [UsageLimit(title: "w", used: 0.8, resetsAt: resets)], fetchedAt: measured),
+    ])
+
+    let store = UsageStore(providers: [RateLimitedProvider(id: "a", name: "A")], defaults: .init(suiteName: "aw.test.cache2")!, cacheURL: url)
+    XCTAssertEqual(store.usages.first?.limits.first?.used, 0.8, "cached values show before the first refresh")
+
+    store.refresh()
+    await waitForRefresh(store)
+    let usage = try? XCTUnwrap(store.usages.first)
+    XCTAssertEqual(usage?.limits, [UsageLimit(title: "w", used: 0.8, resetsAt: resets)])
+    XCTAssertEqual(usage?.fetchedAt, measured)
+    XCTAssertEqual(usage?.plan, "Max")
+    XCTAssertEqual(usage?.message, "rate limited")
+    XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.used, 0.8, "still on disk after the failed check")
+  }
+
+  func testCacheIgnoresHiddenAndUnknownHarnesses() {
+    let url = tempURL()
+    UsageCache(url: url).save([ProviderUsage(id: "gone", name: "Gone"), ProviderUsage(id: "a", name: "A")])
+    let defaults = UserDefaults(suiteName: "aw.test.cache3")!
+    defaults.removePersistentDomain(forName: "aw.test.cache3")
+    XCTAssertEqual(UsageStore(providers: [FakeProvider(id: "a", name: "A", used: 0)], defaults: defaults, cacheURL: url).usages.map(\.id), ["a"])
+    defaults.set(["a"], forKey: UsageStore.Keys.hiddenProviders)
+    XCTAssertEqual(UsageStore(providers: [FakeProvider(id: "a", name: "A", used: 0)], defaults: defaults, cacheURL: url).usages.map(\.id), [])
+  }
+}
+
+struct LoggedOutProvider: UsageProvider {
+  let id: String
+  let name: String
+  func isInstalled() -> Bool { true }
+  func fetch() async -> ProviderUsage { ProviderUsage(id: id, name: name, message: "Not logged in", needsLogin: true) }
+}
+
+@MainActor
+final class LoggedOutTests: XCTestCase {
+  func testLostLoginReplacesCachedValuesOnScreenAndOnDisk() async {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString)/usage.json")
+    UsageCache(url: url).save([ProviderUsage(id: "a", name: "A", limits: [UsageLimit(title: "w", used: 0.9, resetsAt: nil)], fetchedAt: Date())])
+    let store = UsageStore(providers: [LoggedOutProvider(id: "a", name: "A")], defaults: .init(suiteName: "aw.test.logout")!, cacheURL: url)
+    store.refresh()
+    while store.isRefreshing || store.lastRefresh == nil { try? await Task.sleep(nanoseconds: 10_000_000) }
+    XCTAssertEqual(store.usages.first?.limits, [])
+    XCTAssertEqual(store.usages.first?.needsLogin, true)
+    XCTAssertNil(store.severity, "a logged-out harness does not color the icon")
+    XCTAssertEqual(UsageCache(url: url).load().first?.limits, [])
+  }
+
+  func testOldCacheWithoutNeedsLoginStillLoads() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString).json")
+    try Data(#"{"savedAt":"2026-10-31T16:11:12Z","usages":[{"id":"a","name":"A","limits":[{"title":"w","used":0.5}]}]}"#.utf8).write(to: url)
+    XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.used, 0.5)
   }
 }

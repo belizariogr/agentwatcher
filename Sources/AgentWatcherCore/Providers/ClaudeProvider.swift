@@ -73,6 +73,7 @@ public struct ClaudeProvider: UsageProvider {
     var usage = ProviderUsage(id: id, name: name)
     guard let login = login() else {
       usage.message = "Not logged in. Run `claude` and log in to see limits."
+      usage.needsLogin = true
       return usage
     }
     usage.plan = login.plan
@@ -96,6 +97,7 @@ public struct ClaudeProvider: UsageProvider {
         if usage.limits.isEmpty { usage.message = "Anthropic returned no limits." }
       case 401, 403:
         let expired = login.expiresAt.map { $0 < Date() } ?? false
+        usage.needsLogin = true
         usage.message = expired
           ? "Token expired. Open Claude Code to renew the login."
           : "Anthropic rejected the login. Run `claude auth login`."

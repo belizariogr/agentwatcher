@@ -41,16 +41,26 @@ public final class UsageStore: ObservableObject {
 
   public let providers: [any UsageProvider]
   private let defaults: UserDefaults
+  private let cache: UsageCache?
   private var timer: Timer?
 
-  public init(providers: [any UsageProvider] = UsageStore.allProviders, defaults: UserDefaults = .standard) {
+  public init(
+    providers: [any UsageProvider] = UsageStore.allProviders,
+    defaults: UserDefaults = .standard,
+    cacheURL: URL? = UsageCache.defaultURL
+  ) {
     self.providers = providers
     self.defaults = defaults
+    self.cache = cacheURL.map(UsageCache.init(url:))
     let interval = defaults.double(forKey: Keys.refreshInterval)
     refreshInterval = interval >= 60 ? interval : 300
     let threshold = defaults.double(forKey: Keys.alertThreshold)
     alertThreshold = threshold > 0 && threshold < 1 ? threshold : Alert.defaultThreshold
     hiddenProviders = Set(defaults.stringArray(forKey: Keys.hiddenProviders) ?? [])
+    // Last known numbers, so a rate-limited first refresh after launch still
+    // has something to show and to fall back on.
+    let known = Set(providers.map(\.id))
+    usages = (cache?.load() ?? []).filter { known.contains($0.id) && !hiddenProviders.contains($0.id) }
   }
 
   public func isHidden(_ id: String) -> Bool { hiddenProviders.contains(id) }
@@ -113,6 +123,7 @@ public final class UsageStore: ObservableObject {
         .map { $0.merged(withPrevious: previous[$0.id]) }
       self.lastRefresh = Date()
       self.isRefreshing = false
+      self.cache?.save(self.usages)
       if self.pendingRefresh {
         self.pendingRefresh = false
         self.refresh()
@@ -124,5 +135,38 @@ public final class UsageStore: ObservableObject {
 
   public var severity: Double? {
     worstRemaining.flatMap { Alert.severity(remaining: $0, threshold: alertThreshold) }
+  }
+}
+
+/// The usages of the last check, on disk. Rewritten after every refresh.
+public struct UsageCache: Sendable {
+  public let url: URL
+
+  public init(url: URL) { self.url = url }
+
+  public static var defaultURL: URL? {
+    FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+      .appendingPathComponent("AgentWatcher/usage.json")
+  }
+
+  private struct File: Codable {
+    var savedAt: Date
+    var usages: [ProviderUsage]
+  }
+
+  public func load() -> [ProviderUsage] {
+    guard let data = try? Data(contentsOf: url) else { return [] }
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return (try? decoder.decode(File.self, from: data))?.usages ?? []
+  }
+
+  public func save(_ usages: [ProviderUsage]) {
+    let encoder = JSONEncoder()
+    encoder.dateEncodingStrategy = .iso8601
+    encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+    guard let data = try? encoder.encode(File(savedAt: Date(), usages: usages)) else { return }
+    try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+    try? data.write(to: url, options: .atomic)
   }
 }
