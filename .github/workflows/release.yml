@@ -1,34 +1,113 @@
 name: Release
 
-# Push a tag like v0.2.0 to build, sign, notarize and publish a GitHub Release.
-# Run it by hand to get a signed DMG as an artifact without publishing.
+# One job per stage; each hands its output to the next as an artifact:
+#
+#   build → sign-app → dmg → sign-dmg → notarize → publish
+#
+# Resuming:
+# - Same run: "Re-run failed jobs" reruns only the failed stage and the ones
+#   after it; the earlier stages keep their artifacts.
+# - New run (e.g. after changing the workflow): Run workflow on the same tag,
+#   with resume_run = the ID of the run to take the artifacts from and
+#   start_at = the first stage to redo. Both runs must be on the same commit.
+#
+# Push a tag like v0.2.0 to run everything and publish a GitHub Release. Run by
+# hand on a branch to get the DMG as an artifact without publishing.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
+      start_at:
+        description: First stage to run (earlier ones come from resume_run)
+        type: choice
+        options: [build, sign-app, dmg, sign-dmg, notarize, publish]
+        default: build
+      resume_run:
+        description: Run ID to take the earlier stages' artifacts from
+        type: string
+        default: ''
       notarize:
-        description: Notarize the DMG
+        description: Notarize the DMG (publishing needs it)
         type: boolean
         default: true
 
 permissions:
   contents: read
+  actions: read # artifacts of an earlier run
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  RETENTION_DAYS: 14
+
 jobs:
-  release:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      sign-app: ${{ steps.plan.outputs.sign-app }}
+      dmg: ${{ steps.plan.outputs.dmg }}
+      sign-dmg: ${{ steps.plan.outputs.sign-dmg }}
+      notarize: ${{ steps.plan.outputs.notarize }}
+      publish: ${{ steps.plan.outputs.publish }}
+      from-sign-app: ${{ steps.plan.outputs.from-sign-app }}
+      from-dmg: ${{ steps.plan.outputs.from-dmg }}
+      from-sign-dmg: ${{ steps.plan.outputs.from-sign-dmg }}
+      from-notarize: ${{ steps.plan.outputs.from-notarize }}
+      from-publish: ${{ steps.plan.outputs.from-publish }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          START_AT: ${{ inputs.start_at || 'build' }}
+          RESUME_RUN: ${{ inputs.resume_run }}
+          NOTARIZE: ${{ github.event_name != 'workflow_dispatch' || inputs.notarize }}
+          IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+        run: |
+          set -euo pipefail
+          fail() { echo "::error::$*"; exit 1; }
+          if [[ "$IS_TAG" == true ]]; then
+            [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag must look like v1.2.3"
+          fi
+
+          stages=(build sign-app dmg sign-dmg notarize publish)
+          start=-1
+          for i in "${!stages[@]}"; do [[ "${stages[$i]}" == "$START_AT" ]] && start=$i; done
+          (( start >= 0 )) || fail "unknown stage: $START_AT"
+
+          if (( start > 0 )); then
+            [[ "$RESUME_RUN" =~ ^[0-9]+$ ]] || fail "start_at=$START_AT needs resume_run (the run ID to take artifacts from)"
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RESUME_RUN" --jq .head_sha)" \
+              || fail "run $RESUME_RUN not found"
+            [[ "$sha" == "$GITHUB_SHA" ]] || fail "run $RESUME_RUN built $sha, this run is on $GITHUB_SHA"
+          fi
+
+          for i in "${!stages[@]}"; do
+            stage="${stages[$i]}"
+            run=$(( i >= start ))
+            [[ "$stage" == notarize && "$NOTARIZE" != true ]] && run=0
+            [[ "$stage" == publish && ( "$NOTARIZE" != true || "$IS_TAG" != true ) ]] && run=0
+            echo "$stage=$([[ $run == 1 ]] && echo true || echo false)" >>"$GITHUB_OUTPUT"
+            # Input of this stage: this run if the previous stage runs here.
+            if (( i > 0 )); then
+              echo "from-$stage=$( (( i - 1 >= start )) && echo "$GITHUB_RUN_ID" || echo "$RESUME_RUN")" >>"$GITHUB_OUTPUT"
+            fi
+          done
+          cat "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # version from tags, build number from the commit count
           persist-credentials: false
-
       - name: Select the newest stable Xcode
         run: |
           xcode="$(ls -d /Applications/Xcode_*.app | grep -viE 'beta|_rc|release.candidate' | sort -V | tail -1)"
@@ -36,14 +115,37 @@ jobs:
           sudo xcode-select -s "$xcode"
           echo "Using $xcode"
           swift --version
-
       - name: Test
         run: swift test
+      - name: Build the universal app
+        run: ./scripts/release.sh build
+      # Zipped with ditto: artifacts would drop the executable bit and symlinks.
+      - run: ditto -c -k --keepParent build/AgentWatcher.app build/app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-unsigned
+          path: build/app.zip
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
 
-      - name: Check the tag matches a version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: '[[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3"; exit 1; }'
-
+  sign-app:
+    needs: [plan, build]
+    if: >-
+      !cancelled() && needs.plan.outputs.sign-app == 'true' &&
+      (needs.build.result == 'success' || needs.plan.outputs.build != 'true')
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-unsigned
+          path: build
+          run-id: ${{ needs.plan.outputs.from-sign-app }}
+          github-token: ${{ github.token }}
+      - run: ditto -x -k build/app.zip build && rm build/app.zip
       - name: Write the temporary certificate
         env:
           MACOS_P12_BASE64: ${{ secrets.MACOS_P12_BASE64 }}
@@ -51,42 +153,151 @@ jobs:
           [[ -n "$MACOS_P12_BASE64" ]] || { echo "::error::Secret MACOS_P12_BASE64 is missing (scripts/setup-github-secrets.py)"; exit 1; }
           umask 077
           base64 --decode <<<"$MACOS_P12_BASE64" >"$RUNNER_TEMP/developer-id.p12"
-
-      - name: Build, sign, notarize
+      - name: Sign the app
         env:
           MACOS_P12_FILE: ${{ runner.temp }}/developer-id.p12
           MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
           MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
           MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
-          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-          SKIP_NOTARIZE: ${{ (github.event_name == 'workflow_dispatch' && !inputs.notarize) && '1' || '0' }}
-        run: ./scripts/release.sh
-
+        run: ./scripts/release.sh sign-app
       - name: Remove the temporary certificate
         if: always()
         run: rm -f "$RUNNER_TEMP/developer-id.p12"
+      - run: ditto -c -k --keepParent build/AgentWatcher.app build/app.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-signed
+          path: build/app.zip
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
 
+  # No credentials in this job: dmgbuild is third-party code.
+  dmg:
+    needs: [plan, sign-app]
+    if: >-
+      !cancelled() && needs.plan.outputs.dmg == 'true' &&
+      (needs.sign-app.result == 'success' || needs.plan.outputs.sign-app != 'true')
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-signed
+          path: build
+          run-id: ${{ needs.plan.outputs.from-dmg }}
+          github-token: ${{ github.token }}
+      - run: ditto -x -k build/app.zip build && rm build/app.zip
+      - name: Package the DMG
+        env:
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: ./scripts/release.sh dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-unsigned
+          path: build/AgentWatcher-*.dmg
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
+
+  sign-dmg:
+    needs: [plan, dmg]
+    if: >-
+      !cancelled() && needs.plan.outputs.sign-dmg == 'true' &&
+      (needs.dmg.result == 'success' || needs.plan.outputs.dmg != 'true')
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-unsigned
+          path: build
+          run-id: ${{ needs.plan.outputs.from-sign-dmg }}
+          github-token: ${{ github.token }}
+      - name: Write the temporary certificate
+        env:
+          MACOS_P12_BASE64: ${{ secrets.MACOS_P12_BASE64 }}
+        run: |
+          [[ -n "$MACOS_P12_BASE64" ]] || { echo "::error::Secret MACOS_P12_BASE64 is missing (scripts/setup-github-secrets.py)"; exit 1; }
+          umask 077
+          base64 --decode <<<"$MACOS_P12_BASE64" >"$RUNNER_TEMP/developer-id.p12"
+      - name: Sign the DMG
+        env:
+          MACOS_P12_FILE: ${{ runner.temp }}/developer-id.p12
+          MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: ./scripts/release.sh sign-dmg
+      - name: Remove the temporary certificate
+        if: always()
+        run: rm -f "$RUNNER_TEMP/developer-id.p12"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg-signed
+          path: build/AgentWatcher-*.dmg
+          if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
+
+  notarize:
+    needs: [plan, sign-dmg]
+    if: >-
+      !cancelled() && needs.plan.outputs.notarize == 'true' &&
+      (needs.sign-dmg.result == 'success' || needs.plan.outputs.sign-dmg != 'true')
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: dmg-signed
+          path: build
+          run-id: ${{ needs.plan.outputs.from-notarize }}
+          github-token: ${{ github.token }}
+      - name: Notarize and staple
+        env:
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: ./scripts/release.sh notarize
       - uses: actions/upload-artifact@v4
         with:
           name: AgentWatcher-dmg
           path: build/AgentWatcher-*.dmg
           if-no-files-found: error
+          retention-days: ${{ env.RETENTION_DAYS }}
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: release
+    needs: [plan, notarize]
+    if: >-
+      !cancelled() && needs.plan.outputs.publish == 'true' &&
+      (needs.notarize.result == 'success' || needs.plan.outputs.notarize != 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: AgentWatcher-dmg
-      - name: Create the GitHub Release
+          run-id: ${{ needs.plan.outputs.from-publish }}
+          github-token: ${{ github.token }}
+      # Idempotent: a release left half-done by an earlier attempt gets its
+      # assets replaced instead of failing.
+      - name: Create or update the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
           shasum -a 256 AgentWatcher-*.dmg | tee SHA256SUMS.txt
-          gh release create "$GITHUB_REF_NAME" AgentWatcher-*.dmg SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --title "Agent Watcher ${GITHUB_REF_NAME#v}" --generate-notes
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" AgentWatcher-*.dmg SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" AgentWatcher-*.dmg SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" --title "Agent Watcher ${GITHUB_REF_NAME#v}" --generate-notes
+          fi
