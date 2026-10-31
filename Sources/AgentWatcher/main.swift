@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
   private let popover = NSPopover()
   private var cancellables = Set<AnyCancellable>()
+  private lazy var settings = SettingsWindowController(store: store)
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -21,7 +22,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     popover.behavior = .transient
     popover.animates = true
     popover.contentViewController = NSHostingController(
-      rootView: PanelView(store: store, onQuit: { NSApp.terminate(nil) })
+      rootView: PanelView(
+        store: store,
+        onOpenSettings: { [weak self] in self?.openSettings() },
+        onQuit: { NSApp.terminate(nil) }
+      )
     )
 
     // objectWillChange fires before the new values land; read them a turn later.
@@ -76,6 +81,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func showMenu() {
     let menu = NSMenu()
     menu.addItem(withTitle: "Atualizar", action: #selector(refreshNow), keyEquivalent: "r").target = self
+    menu.addItem(withTitle: "Configurações…", action: #selector(openSettings), keyEquivalent: ",").target = self
     menu.addItem(.separator())
     menu.addItem(withTitle: "Sair", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     statusItem.menu = menu
@@ -84,6 +90,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func refreshNow() { store.refresh() }
+
+  @objc private func openSettings() {
+    popover.performClose(nil)
+    settings.show()
+  }
 }
 
 // `AgentWatcher --dump` prints what the panel would show and exits.
@@ -106,6 +117,7 @@ if CommandLine.arguments.contains("--dump") {
 // `AgentWatcher --snapshot <dir>` renders the panel and the icon to PNGs.
 if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
   let dir = URL(fileURLWithPath: CommandLine.arguments.count > flag + 1 ? CommandLine.arguments[flag + 1] : ".")
+  try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
   MainActor.assumeIsolated {
     let store = UsageStore()
     store.refresh()
@@ -118,7 +130,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
       try? png.write(to: dir.appendingPathComponent(name))
     }
     for scheme in [ColorScheme.light, .dark] {
-      let renderer = ImageRenderer(content: PanelView(store: store, onQuit: {})
+      let renderer = ImageRenderer(content: PanelView(store: store, onOpenSettings: {}, onQuit: {})
         .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.96))
         .environment(\.colorScheme, scheme))
       renderer.scale = 2

@@ -8,10 +8,11 @@ nativamente em Swift/SwiftUI.
 
 - **Clique esquerdo** no ícone: painel com cada harness, plano, % usado de
   cada janela (sessão de 5h, semanal, limites por modelo) e quando renova.
-- **Clique direito**: Atualizar / Sair.
-- O ícone é um anel que enche conforme a janela mais apertada entre todos os
-  harnesses. Quando qualquer harness fica com **15% ou menos** restantes, o
-  ícone sai da cor do sistema e vai de amarelo → laranja → **vermelho** em 0%.
+- **Clique direito**: Atualizar / Configurações… / Sair.
+- O ícone é um anel com uma faísca no centro; o anel enche conforme a janela
+  mais apertada entre todos os harnesses. Quando qualquer harness fica com
+  **15% ou menos** restantes (limiar configurável), o ícone sai da cor do
+  sistema e vai de amarelo → laranja → **vermelho** em 0%.
 
 ## Instalar
 
@@ -21,9 +22,19 @@ Requer macOS 14+ e Xcode / Command Line Tools (Swift 6).
 make install   # gera build/AgentWatcher.app, copia para ~/Applications e abre
 ```
 
-Marque "Abrir ao iniciar sessão" no painel para ele subir com o login.
+Para ele subir com o login, ative "Iniciar com o sistema" nas Configurações.
 
 Outros alvos: `make run` (gera e abre o .app local), `make test`, `make clean`.
+
+### Ícone do app
+
+O ícone ("Faísca Neon") é gerado por `scripts/app_icon.py` em
+`Resources/AppIcon.icns`. Para trocar a paleta (requer `rsvg-convert`, do
+`librsvg`):
+
+```bash
+make icon PALETTE=aurora && make run   # oceano, aurora, lilas, ambar, gelo
+```
 
 ## De onde vêm os números
 
@@ -39,11 +50,23 @@ mantém os últimos números bons e mostra o aviso.
 
 ## Configuração
 
+O botão **Configurações** (⌘,) no rodapé do painel abre uma janela com:
+
+- intervalo de atualização (1 min a 1 h; padrão 5 min);
+- iniciar com o sistema;
+- limiar de alerta do ícone (5–50%; padrão 15%);
+- esconder harnesses do painel e do ícone.
+
+As mesmas opções ficam em `UserDefaults`, então também dá para ajustar pelo
+terminal:
+
 ```bash
 # Intervalo de atualização em segundos (padrão 300, mínimo 60)
 defaults write com.belizariogr.agentwatcher refreshInterval -int 600
 # Fração restante em que o ícone começa a mudar de cor (padrão 0.15)
 defaults write com.belizariogr.agentwatcher alertThreshold -float 0.2
+# Harnesses escondidos (ids: claude, codex)
+defaults write com.belizariogr.agentwatcher hiddenProviders -array codex
 ```
 
 ## Depuração
@@ -51,7 +74,7 @@ defaults write com.belizariogr.agentwatcher alertThreshold -float 0.2
 ```bash
 swift build
 .build/debug/AgentWatcher --dump              # imprime os limites e sai
-.build/debug/AgentWatcher --snapshot /tmp     # renderiza painel e ícone em PNG
+.build/debug/AgentWatcher --snapshot /tmp/aw # renderiza painel e ícone em PNG
 ```
 
 ## Adicionar um harness

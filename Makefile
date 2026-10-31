@@ -1,4 +1,4 @@
-.PHONY: build app install run test clean
+.PHONY: build app install run test clean icon
 
 build:
 	swift build
@@ -22,3 +22,7 @@ run: app
 
 clean:
 	rm -rf .build build
+
+# make icon PALETTE=aurora  (palettes: scripts/app_icon.py --list)
+icon:
+	./scripts/make-icon.sh $(or $(PALETTE),oceano)

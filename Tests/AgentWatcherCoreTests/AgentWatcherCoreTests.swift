@@ -93,3 +93,54 @@ final class CodexParsingTests: XCTestCase {
     XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "GPT-5 Pro · Semanal"])
   }
 }
+
+struct FakeProvider: UsageProvider {
+  let id: String
+  let name: String
+  let used: Double
+  func isInstalled() -> Bool { true }
+  func fetch() async -> ProviderUsage {
+    ProviderUsage(id: id, name: name, limits: [UsageLimit(title: "w", used: used, resetsAt: nil)], fetchedAt: Date())
+  }
+}
+
+@MainActor
+final class StoreSettingsTests: XCTestCase {
+  func makeStore(_ suite: String) -> (UsageStore, UserDefaults) {
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let store = UsageStore(providers: [
+      FakeProvider(id: "a", name: "A", used: 0.2),
+      FakeProvider(id: "b", name: "B", used: 0.95),
+    ], defaults: defaults)
+    return (store, defaults)
+  }
+
+  func waitForRefresh(_ store: UsageStore) async {
+    while store.isRefreshing || store.lastRefresh == nil { try? await Task.sleep(nanoseconds: 10_000_000) }
+  }
+
+  func testHiddenHarnessIsNotFetchedAndDoesNotColorTheIcon() async {
+    let (store, defaults) = makeStore("aw.test.hidden")
+    store.setHidden("b", true)
+    store.refresh()
+    await waitForRefresh(store)
+    XCTAssertEqual(store.usages.map(\.id), ["a"])
+    XCTAssertNil(store.severity)
+    XCTAssertEqual(defaults.stringArray(forKey: UsageStore.Keys.hiddenProviders), ["b"])
+
+    store.setHidden("b", false)
+    await waitForRefresh(store)
+    XCTAssertEqual(store.usages.map(\.id), ["a", "b"])
+    XCTAssertNotNil(store.severity)
+  }
+
+  func testSettingsPersist() {
+    let (store, defaults) = makeStore("aw.test.persist")
+    store.refreshInterval = 600
+    store.alertThreshold = 0.25
+    let reloaded = UsageStore(providers: [], defaults: defaults)
+    XCTAssertEqual(reloaded.refreshInterval, 600)
+    XCTAssertEqual(reloaded.alertThreshold, 0.25)
+  }
+}

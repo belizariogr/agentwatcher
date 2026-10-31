@@ -1,9 +1,9 @@
 import AgentWatcherCore
-import ServiceManagement
 import SwiftUI
 
 struct PanelView: View {
   @ObservedObject var store: UsageStore
+  var onOpenSettings: () -> Void
   var onQuit: () -> Void
 
   var body: some View {
@@ -11,7 +11,7 @@ struct PanelView: View {
       header
 
       if store.usages.isEmpty {
-        Text(store.isRefreshing ? "Carregando…" : "Nenhum harness encontrado.\nClaude Code e Codex aparecem aqui quando instalados.")
+        Text(store.isRefreshing ? "Carregando…" : "Nenhum harness para mostrar.\nClaude Code e Codex aparecem aqui quando instalados e ativos nas configurações.")
           .font(.callout)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)
@@ -41,22 +41,34 @@ struct PanelView: View {
             .foregroundStyle(.secondary)
         }
       }
-      Button {
-        store.refresh()
-      } label: {
-        Image(systemName: "arrow.clockwise")
-          .rotationEffect(.degrees(store.isRefreshing ? 360 : 0))
-          .animation(store.isRefreshing ? .linear(duration: 1).repeatForever(autoreverses: false) : .default, value: store.isRefreshing)
+      // A fixed frame, and no repeating animation: a repeatForever rotation
+      // also animated the button's position while the popover laid out.
+      ZStack {
+        if store.isRefreshing {
+          ProgressView().controlSize(.small).scaleEffect(0.75)
+        } else {
+          Button {
+            store.refresh()
+          } label: {
+            Image(systemName: "arrow.clockwise")
+          }
+          .buttonStyle(.borderless)
+          .help("Atualizar agora")
+        }
       }
-      .buttonStyle(.borderless)
-      .disabled(store.isRefreshing)
-      .help("Atualizar agora")
+      .frame(width: 18, height: 18)
     }
   }
 
   private var footer: some View {
     HStack {
-      LaunchAtLoginToggle()
+      Button {
+        onOpenSettings()
+      } label: {
+        Label("Configurações", systemImage: "gearshape")
+      }
+      .buttonStyle(.borderless)
+      .keyboardShortcut(",")
       Spacer()
       Button("Sair", action: onQuit)
         .buttonStyle(.borderless)
@@ -73,7 +85,7 @@ struct ProviderCard: View {
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
-        logo
+        ProviderLogo(id: usage.id, size: 18)
         Text(usage.name).font(.system(size: 13, weight: .semibold))
         if let plan = usage.plan {
           Text(plan)
@@ -101,15 +113,21 @@ struct ProviderCard: View {
     .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
   }
 
-  @ViewBuilder private var logo: some View {
-    if let image = Logos.image(for: usage.id) {
+}
+
+struct ProviderLogo: View {
+  let id: String
+  let size: CGFloat
+
+  var body: some View {
+    if let image = Logos.image(for: id) {
       Image(nsImage: image)
         .resizable()
         .renderingMode(image.isTemplate ? .template : .original)
         .scaledToFit()
-        .frame(width: 18, height: 18)
+        .frame(width: size, height: size)
     } else {
-      Image(systemName: "cpu").frame(width: 18, height: 18)
+      Image(systemName: "cpu").frame(width: size, height: size)
     }
   }
 }
@@ -167,22 +185,5 @@ struct Meter: View {
       }
     }
     .frame(height: 6)
-  }
-}
-
-/// Only meaningful when running from the .app bundle.
-struct LaunchAtLoginToggle: View {
-  @State private var enabled = SMAppService.mainApp.status == .enabled
-
-  var body: some View {
-    Toggle("Abrir ao iniciar sessão", isOn: $enabled)
-      .toggleStyle(.checkbox)
-      .onChange(of: enabled) { _, wanted in
-        do {
-          if wanted { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
-        } catch {
-          enabled = SMAppService.mainApp.status == .enabled
-        }
-      }
   }
 }
