@@ -5,6 +5,7 @@ import SwiftUI
 
 struct SettingsView: View {
   @ObservedObject var store: UsageStore
+  @ObservedObject var updater: Updater
 
   var body: some View {
     Form {
@@ -31,6 +32,33 @@ struct SettingsView: View {
       } footer: {
         Text("Below this, the menu bar icon goes from yellow to red.")
           .foregroundStyle(.secondary)
+      }
+
+      Section {
+        Toggle("Check for updates automatically", isOn: $updater.checkAutomatically)
+        Toggle("Install updates automatically", isOn: $updater.installAutomatically)
+          .disabled(!updater.checkAutomatically)
+        HStack {
+          Text("Version \(updater.versionString)").foregroundStyle(.secondary)
+          Spacer()
+          Button("Check Now") { updater.check() }
+            .disabled(updater.state == .checking)
+        }
+      } header: {
+        Text("Updates")
+      } footer: {
+        Group {
+          if let reason = updater.notInstallableReason {
+            Text(reason)
+          } else if !updater.isReleaseBuild {
+            Text("This is a local build: it reports new releases but doesn't replace itself.")
+          } else if let last = updater.lastCheck {
+            Text("From GitHub Releases. Last checked \(last, format: .relative(presentation: .named)).")
+          } else {
+            Text("From GitHub Releases, every 6 hours.")
+          }
+        }
+        .foregroundStyle(.secondary)
       }
 
       Section("Harnesses") {
@@ -98,12 +126,16 @@ struct LaunchAtLoginToggle: View {
 final class SettingsWindowController {
   private var window: NSWindow?
   private let store: UsageStore
+  private let updater: Updater
 
-  init(store: UsageStore) { self.store = store }
+  init(store: UsageStore, updater: Updater) {
+    self.store = store
+    self.updater = updater
+  }
 
   func show() {
     if window == nil {
-      let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
+      let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store, updater: updater)))
       window.title = "Agent Watcher Settings"
       window.styleMask = [.titled, .closable]
       window.isReleasedWhenClosed = false

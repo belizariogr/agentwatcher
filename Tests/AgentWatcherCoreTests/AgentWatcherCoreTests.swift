@@ -298,3 +298,45 @@ final class RateLimitTests: XCTestCase {
     XCTAssertTrue(merged.rateLimited)
   }
 }
+
+final class UpdaterTests: XCTestCase {
+  func testVersionOrdering() {
+    XCTAssertLessThan(AppVersion("0.9.9")!, AppVersion("v0.10.0")!)
+    XCTAssertLessThan(AppVersion("1.2")!, AppVersion("1.2.1")!)
+    XCTAssertEqual(AppVersion("1.2.0")!, AppVersion("v1.2")!)
+    XCTAssertFalse(AppVersion("1.3.0")! < AppVersion("1.2.9")!)
+    XCTAssertNil(AppVersion("1.2.0-beta"))
+    XCTAssertNil(AppVersion(""))
+  }
+
+  private func release(tag: String = "v1.4.0", prerelease: Bool = false, assets: [String]) -> Data {
+    let list = assets.map { "{\"name\":\"\($0)\",\"browser_download_url\":\"https://github.com/o/r/releases/download/\(tag)/\($0)\"}" }
+    return Data("""
+      {"tag_name":"\(tag)","html_url":"https://github.com/o/r/releases/tag/\(tag)","draft":false,
+       "prerelease":\(prerelease),"assets":[\(list.joined(separator: ","))]}
+      """.utf8)
+  }
+
+  func testParsesLatestRelease() {
+    let info = ReleaseInfo.parse(release(assets: ["SHA256SUMS.txt", "AgentWatcher-1.4.0.dmg"]))!
+    XCTAssertEqual(info.version, AppVersion("1.4.0"))
+    XCTAssertEqual(info.dmgName, "AgentWatcher-1.4.0.dmg")
+    XCTAssertEqual(info.dmgURL.lastPathComponent, "AgentWatcher-1.4.0.dmg")
+    XCTAssertEqual(info.checksumsURL?.lastPathComponent, "SHA256SUMS.txt")
+  }
+
+  func testRejectsUnusableReleases() {
+    XCTAssertNil(ReleaseInfo.parse(release(assets: ["SHA256SUMS.txt"])))
+    XCTAssertNil(ReleaseInfo.parse(release(prerelease: true, assets: ["AgentWatcher-1.4.0.dmg"])))
+    XCTAssertNil(ReleaseInfo.parse(release(tag: "nightly", assets: ["AgentWatcher-1.4.0.dmg"])))
+    XCTAssertNil(ReleaseInfo.parse(Data("not json".utf8)))
+  }
+
+  func testChecksumLookup() {
+    let hash = String(repeating: "ab", count: 32)
+    let listing = "\(String(repeating: "0", count: 64))  Other.dmg\n\(hash.uppercased())  AgentWatcher-1.4.0.dmg\n"
+    XCTAssertEqual(ReleaseInfo.checksum(for: "AgentWatcher-1.4.0.dmg", in: listing), hash)
+    XCTAssertNil(ReleaseInfo.checksum(for: "Missing.dmg", in: listing))
+    XCTAssertNil(ReleaseInfo.checksum(for: "Bad.dmg", in: "xyz  Bad.dmg"))
+  }
+}
