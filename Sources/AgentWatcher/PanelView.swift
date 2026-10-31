@@ -21,7 +21,7 @@ struct PanelView: View {
           .padding(.vertical, 24)
       } else {
         ForEach(store.usages) { usage in
-          ProviderCard(usage: usage, threshold: store.alertThreshold)
+          ProviderCard(usage: usage, warning: store.warningThreshold, critical: store.criticalThreshold)
         }
       }
 
@@ -114,7 +114,8 @@ struct PanelView: View {
 
 struct ProviderCard: View {
   let usage: ProviderUsage
-  let threshold: Double
+  let warning: Double
+  let critical: Double
 
   var body: some View {
     VStack(alignment: .leading, spacing: 8) {
@@ -155,7 +156,7 @@ struct ProviderCard: View {
       }
 
       ForEach(usage.limits) { limit in
-        LimitRow(limit: limit, threshold: threshold)
+        LimitRow(limit: limit, warning: warning, critical: critical)
       }
     }
     .padding(10)
@@ -198,25 +199,27 @@ struct ProviderLogo: View {
 
 struct LimitRow: View {
   let limit: UsageLimit
-  let threshold: Double
+  let warning: Double
+  let critical: Double
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 60)) { context in
       let used = limit.effectiveUsed(now: context.date)
-      let severity = Alert.severity(remaining: 1 - used, threshold: threshold)
-      let tint = severity.map { Color(StatusIcon.nsColor(Alert.color(severity: $0))) } ?? Color.accentColor
+      let level = Alert.level(remaining: 1 - used, warning: warning, critical: critical)
+      let tint = Alert.color(remaining: 1 - used, warning: warning, critical: critical)
+        .map { Color(StatusIcon.nsColor($0)) } ?? Color.accentColor
 
       VStack(alignment: .leading, spacing: 4) {
         HStack {
           Text(limit.title).font(.callout)
           Spacer()
-          Text("\(Int(((1 - used) * 100).rounded()))% left")
-            .font(.callout.monospacedDigit().weight(severity == nil ? .regular : .semibold))
-            .foregroundStyle(severity == nil ? Color.primary : tint)
+          Text("\(Alert.percentLeft(1 - used))% left")
+            .font(.callout.monospacedDigit().weight(level == nil ? .regular : .semibold))
+            .foregroundStyle(level == nil ? Color.primary : tint)
         }
         Meter(value: used, tint: tint)
         HStack {
-          Text("\(Int((used * 100).rounded()))% used")
+          Text("\(100 - Alert.percentLeft(1 - used))% used")
           Spacer()
           if let resetsAt = limit.resetsAt, resetsAt > context.date {
             Text("Resets in \(Self.duration(resetsAt.timeIntervalSince(context.date)))")

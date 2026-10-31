@@ -3,6 +3,36 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
+private struct ThresholdSlider: View {
+  let label: String
+  let color: AlertLevel
+  @Binding var value: Double
+  let range: ClosedRange<Double>
+
+  var body: some View {
+    HStack {
+      // No `step:`, which would draw a tick per step; snap to whole percents here instead.
+      Slider(value: Binding(
+        get: { value },
+        set: { new in
+          let snapped = (new / Alert.step).rounded() * Alert.step
+          if snapped != value { value = snapped }
+        }
+      ), in: range) {
+        HStack(spacing: 6) {
+          Circle()
+            .fill(Color(StatusIcon.nsColor(Alert.color(color))))
+            .frame(width: 8, height: 8)
+          Text(label)
+        }
+      }
+      Text("\(Int((value * 100).rounded()))% left")
+        .monospacedDigit()
+        .frame(width: 100, alignment: .trailing)
+    }
+  }
+}
+
 struct SettingsView: View {
   @ObservedObject var store: UsageStore
   @ObservedObject var updater: Updater
@@ -19,19 +49,33 @@ struct SettingsView: View {
       }
 
       Section {
-        HStack {
-          Slider(value: $store.alertThreshold, in: 0.05...0.5, step: 0.05) {
-            Text("Alert at")
-          }
-          Text("\(Int((store.alertThreshold * 100).rounded()))% left")
-            .monospacedDigit()
-            .frame(width: 100, alignment: .trailing)
-        }
+        ThresholdSlider(label: "Orange at", color: .warning, value: $store.warningThreshold, range: 0.01...0.5)
+        ThresholdSlider(label: "Red at", color: .critical, value: $store.criticalThreshold, range: 0...0.49)
       } header: {
         Text("Alert")
       } footer: {
-        Text("Below this, the menu bar icon goes from yellow to red.")
+        Text("The menu bar icon and the panel turn orange, then red, when any harness has this much or less left.")
           .foregroundStyle(.secondary)
+      }
+
+      Section("Harnesses") {
+        ForEach(store.providers, id: \.id) { provider in
+          let installed = provider.isInstalled()
+          Toggle(isOn: Binding(
+            get: { !store.isHidden(provider.id) },
+            set: { store.setHidden(provider.id, !$0) }
+          )) {
+            HStack(spacing: 8) {
+              ProviderLogo(id: provider.id, size: 16)
+              VStack(alignment: .leading, spacing: 1) {
+                Text(provider.name)
+                if !installed {
+                  Text("Not installed").font(.caption).foregroundStyle(.secondary)
+                }
+              }
+            }
+          }
+        }
       }
 
       Section {
@@ -59,26 +103,6 @@ struct SettingsView: View {
           }
         }
         .foregroundStyle(.secondary)
-      }
-
-      Section("Harnesses") {
-        ForEach(store.providers, id: \.id) { provider in
-          let installed = provider.isInstalled()
-          Toggle(isOn: Binding(
-            get: { !store.isHidden(provider.id) },
-            set: { store.setHidden(provider.id, !$0) }
-          )) {
-            HStack(spacing: 8) {
-              ProviderLogo(id: provider.id, size: 16)
-              VStack(alignment: .leading, spacing: 1) {
-                Text(provider.name)
-                if !installed {
-                  Text("Not installed").font(.caption).foregroundStyle(.secondary)
-                }
-              }
-            }
-          }
-        }
       }
     }
     .formStyle(.grouped)

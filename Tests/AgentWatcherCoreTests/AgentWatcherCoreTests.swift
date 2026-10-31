@@ -2,18 +2,49 @@
 import XCTest
 
 final class AlertTests: XCTestCase {
-  func testNoAlertAboveThreshold() {
-    XCTAssertNil(Alert.severity(remaining: 0.16, threshold: 0.15))
-    XCTAssertNil(Alert.severity(remaining: 1, threshold: 0.15))
+  func testNoAlertAboveWarning() {
+    XCTAssertNil(Alert.level(remaining: 0.21, warning: 0.2, critical: 0.1))
+    XCTAssertNil(Alert.level(remaining: 1, warning: 0.2, critical: 0.1))
   }
 
-  func testSeverityRampsToRed() {
-    XCTAssertEqual(Alert.severity(remaining: 0.15, threshold: 0.15)!, 0, accuracy: 1e-9)
-    XCTAssertEqual(Alert.severity(remaining: 0.075, threshold: 0.15)!, 0.5, accuracy: 1e-9)
-    XCTAssertEqual(Alert.severity(remaining: 0, threshold: 0.15)!, 1, accuracy: 1e-9)
-    XCTAssertEqual(Alert.color(severity: 0), Alert.yellow)
-    XCTAssertEqual(Alert.color(severity: 0.5), Alert.orange)
-    XCTAssertEqual(Alert.color(severity: 1), Alert.red)
+  func testOrangeThenRed() {
+    XCTAssertEqual(Alert.level(remaining: 0.2, warning: 0.2, critical: 0.1), .warning)
+    XCTAssertEqual(Alert.level(remaining: 0.11, warning: 0.2, critical: 0.1), .warning)
+    XCTAssertEqual(Alert.level(remaining: 0.1, warning: 0.2, critical: 0.1), .critical)
+    XCTAssertEqual(Alert.level(remaining: 0, warning: 0.2, critical: 0.1), .critical)
+    XCTAssertEqual(Alert.color(.warning), Alert.orange)
+    XCTAssertEqual(Alert.color(.critical), Alert.red)
+  }
+
+  func testColorReddensTowardCritical() {
+    XCTAssertNil(Alert.color(remaining: 0.21, warning: 0.2, critical: 0.1))
+    XCTAssertEqual(Alert.color(remaining: 0.2, warning: 0.2, critical: 0.1), Alert.orange)
+    let near = Alert.color(remaining: 0.11, warning: 0.2, critical: 0.1)!
+    XCTAssertEqual(near.g, Alert.orange.g + (Alert.red.g - Alert.orange.g) * 0.9, accuracy: 1e-9)
+    XCTAssertEqual(Alert.color(remaining: 0.1, warning: 0.2, critical: 0.1), Alert.red)
+    XCTAssertEqual(Alert.color(remaining: 0, warning: 0.2, critical: 0.1), Alert.red)
+  }
+
+  func testPercentLeftIsTruncated() {
+    XCTAssertEqual(Alert.percentLeft(0.109), 10)
+    XCTAssertEqual(Alert.percentLeft(0.29), 29)
+    XCTAssertEqual(Alert.percentLeft(1 - 0.71), 29)
+    XCTAssertEqual(Alert.percentLeft(0.999), 99)
+    XCTAssertEqual(Alert.percentLeft(1), 100)
+    XCTAssertEqual(Alert.percentLeft(-0.1), 0)
+  }
+
+  func testThresholdsMatchTheTruncatedPercentShown() {
+    XCTAssertEqual(Alert.level(remaining: 0.109, warning: 0.2, critical: 0.1), .critical, "shown as 10% left")
+    XCTAssertEqual(Alert.level(remaining: 0.11, warning: 0.2, critical: 0.1), .warning, "shown as 11% left")
+    XCTAssertEqual(Alert.level(remaining: 0.209, warning: 0.2, critical: 0.1), .warning, "shown as 20% left")
+    XCTAssertNil(Alert.level(remaining: 0.21, warning: 0.2, critical: 0.1), "shown as 21% left")
+    XCTAssertEqual(Alert.color(remaining: 0.109, warning: 0.2, critical: 0.1), Alert.red)
+  }
+
+  func testRedOnlyWhenExhaustedWithZeroCritical() {
+    XCTAssertEqual(Alert.level(remaining: 0.01, warning: 0.2, critical: 0), .warning)
+    XCTAssertEqual(Alert.level(remaining: 0, warning: 0.2, critical: 0), .critical)
   }
 
   func testWorstRemainingAcrossProviders() {
@@ -155,22 +186,43 @@ final class StoreSettingsTests: XCTestCase {
     store.refresh()
     await waitForRefresh(store)
     XCTAssertEqual(store.usages.map(\.id), ["a"])
-    XCTAssertNil(store.severity)
+    XCTAssertNil(store.alertLevel)
     XCTAssertEqual(defaults.stringArray(forKey: UsageStore.Keys.hiddenProviders), ["b"])
 
     store.setHidden("b", false)
     await waitForRefresh(store)
     XCTAssertEqual(store.usages.map(\.id), ["a", "b"])
-    XCTAssertNotNil(store.severity)
+    XCTAssertEqual(store.alertLevel, .critical)
   }
 
   func testSettingsPersist() {
     let (store, defaults) = makeStore("aw.test.persist")
     store.refreshInterval = 600
-    store.alertThreshold = 0.25
+    store.warningThreshold = 0.3
+    store.criticalThreshold = 0.15
     let reloaded = UsageStore(providers: [], defaults: defaults, cacheURL: nil)
     XCTAssertEqual(reloaded.refreshInterval, 600)
-    XCTAssertEqual(reloaded.alertThreshold, 0.25)
+    XCTAssertEqual(reloaded.warningThreshold, 0.3)
+    XCTAssertEqual(reloaded.criticalThreshold, 0.15)
+  }
+
+  func testRedStaysBelowOrange() {
+    let (store, _) = makeStore("aw.test.order")
+    store.warningThreshold = 0.3
+    store.criticalThreshold = 0.15
+    store.warningThreshold = 0.1
+    XCTAssertEqual(store.criticalThreshold, 0.09, accuracy: 1e-9)
+    store.criticalThreshold = 0.25
+    XCTAssertEqual(store.warningThreshold, 0.26, accuracy: 1e-9)
+  }
+
+  func testOldSingleThresholdBecomesOrange() {
+    let defaults = UserDefaults(suiteName: "aw.test.migrate")!
+    defaults.removePersistentDomain(forName: "aw.test.migrate")
+    defaults.set(0.15, forKey: "alertThreshold")
+    let store = UsageStore(providers: [], defaults: defaults, cacheURL: nil)
+    XCTAssertEqual(store.warningThreshold, 0.15)
+    XCTAssertEqual(store.criticalThreshold, 0.1)
   }
 }
 
@@ -250,7 +302,7 @@ final class LoggedOutTests: XCTestCase {
     while store.isRefreshing || store.lastRefresh == nil { try? await Task.sleep(nanoseconds: 10_000_000) }
     XCTAssertEqual(store.usages.first?.limits, [])
     XCTAssertEqual(store.usages.first?.needsLogin, true)
-    XCTAssertNil(store.severity, "a logged-out harness does not color the icon")
+    XCTAssertNil(store.alertLevel, "a logged-out harness does not color the icon")
     XCTAssertEqual(UsageCache(url: url).load().first?.limits, [])
   }
 
