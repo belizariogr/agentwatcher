@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let store = UsageStore()
   private var statusItem: NSStatusItem!
   private let popover = NSPopover()
+  private var panel: NSHostingController<PanelView>!
   private var cancellables = Set<AnyCancellable>()
   private let updater = Updater()
   private lazy var settings = SettingsWindowController(store: store, updater: updater)
@@ -23,7 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     popover.behavior = .transient
     popover.animates = true
-    popover.contentViewController = NSHostingController(
+    panel = NSHostingController(
       rootView: PanelView(
         store: store,
         updater: updater,
@@ -32,6 +33,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         onQuit: { NSApp.terminate(nil) }
       )
     )
+    // The popover follows the SwiftUI content's size as it changes.
+    panel.sizingOptions = [.preferredContentSize]
+    popover.contentViewController = panel
 
     // objectWillChange fires before the new values land; read them a turn
     // later. The main queue (unlike RunLoop.main's default mode) also runs
@@ -83,9 +87,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       popover.performClose(sender)
     } else {
       store.refreshIfStale()
-      popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
-      popover.contentViewController?.view.window?.makeKey()
-      NSApp.activate()
+      showPopover(below: sender, retry: true)
+    }
+  }
+
+  /// Opens the panel under the icon. NSPopover picks its edge from the size
+  /// it knows when shown; a stale or not yet measured size could make it
+  /// "not fit" below and flip above the menu bar. So measure first, and if it
+  /// still lands above the icon, reopen it once.
+  private func showPopover(below button: NSStatusBarButton, retry: Bool) {
+    NSApp.activate()
+    panel.view.layoutSubtreeIfNeeded()
+    let size = panel.view.fittingSize
+    if size.width > 0, size.height > 0 { popover.contentSize = size }
+    popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    popover.contentViewController?.view.window?.makeKey()
+
+    guard retry else { return }
+    DispatchQueue.main.async { [weak self] in
+      guard let self, self.popover.isShown,
+            let panelWindow = self.popover.contentViewController?.view.window,
+            let buttonWindow = button.window,
+            panelWindow.frame.midY > buttonWindow.frame.minY
+      else { return }
+      let animates = self.popover.animates
+      self.popover.animates = false
+      self.popover.close()
+      self.popover.animates = animates
+      self.showPopover(below: button, retry: false)
     }
   }
 
