@@ -155,7 +155,7 @@ struct ProviderCard: View {
         }
       }
 
-      ForEach(usage.limits) { limit in
+      ForEach(usage.visibleLimits) { limit in
         LimitRow(limit: limit, warning: warning, critical: critical)
       }
     }

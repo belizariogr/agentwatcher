@@ -122,17 +122,31 @@ public struct CursorProvider: UsageProvider {
 
   /// Included usage is split into the Auto + Composer pool ("Cursor Models")
   /// and the API pool for named third-party models ("Other Models"); both
-  /// renew with the billing cycle.
+  /// renew with the billing cycle. `totalPercentUsed` is the combined share
+  /// of those two allowances (T3 Code's "Overall"), not a third quota, and
+  /// that is what colors the icon.
   static func parseLimits(_ payload: JSON) -> [UsageLimit] {
     guard let plan = payload.object("planUsage") else { return [] }
     let resets = Dates.parse(payload["billingCycleEnd"])
     var limits: [UsageLimit] = []
-    func add(_ key: String, _ title: String) {
+    func add(_ key: String, _ title: String, countsTowardAlert: Bool = true) {
       guard let pct = plan.number(key), pct >= 0 else { return }
-      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: resets))
+      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: resets, countsTowardAlert: countsTowardAlert))
     }
-    add("autoPercentUsed", "Cursor Models")
-    add("apiPercentUsed", "Other Models")
+    add("totalPercentUsed", "Overall")
+    add("autoPercentUsed", "Cursor Models", countsTowardAlert: false)
+    add("apiPercentUsed", "Other Models", countsTowardAlert: false)
+    let hasBothPools = limits.contains { $0.title == "Cursor Models" }
+      && limits.contains { $0.title == "Other Models" }
+    if hasBothPools {
+      limits = limits.map {
+        UsageLimit(title: $0.title, used: $0.used, resetsAt: $0.resetsAt,
+                   countsTowardAlert: $0.countsTowardAlert, shownInPanel: $0.title != "Overall")
+      }
+    }
+    if !limits.contains(where: \.countsTowardAlert) {
+      limits = limits.map { UsageLimit(title: $0.title, used: $0.used, resetsAt: $0.resetsAt) }
+    }
     // Older plans only report spend against the included amount.
     if limits.isEmpty, let spent = plan.number("includedSpend"), let limit = plan.number("limit"), limit > 0 {
       limits.append(UsageLimit(title: "Monthly", used: spent / limit, resetsAt: resets))

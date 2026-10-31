@@ -4,7 +4,7 @@ import Combine
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   private let store = UsageStore()
   private var statusItem: NSStatusItem!
   private let popover = NSPopover()
@@ -13,17 +13,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private let updater = Updater()
   private lazy var settings = SettingsWindowController(store: store, updater: updater)
   private lazy var about = AboutWindowController(updater: updater)
+  private weak var popoverAnchor: NSStatusBarButton?
+  private var pinningPopover = false
+  private var popoverFrameObservers: [NSObjectProtocol] = []
+  /// Generation token so delayed pins from a previous open/close do not fire.
+  private var pinGeneration = 0
+  private var pendingPins: [DispatchWorkItem] = []
+  /// While this is in the future, NSPopover's late `didMove` is forced back
+  /// below the menu bar. The usual open is already correct; the miss is a
+  /// flip a beat later, after SwiftUI publishes its real size.
+  private var holdBelowUntil: Date?
+  /// Same-click reopen: a transient popover dismisses on mouseDown, then the
+  /// button action runs with `isShown == false`. Only that follow-up is
+  /// swallowed — not the next click ~500 ms later.
+  private var ignoreToggleUntil: Date?
+  private var closingFromToggle = false
+  private var statusItemMouseDownMonitor: Any?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
     if let button = statusItem.button {
       button.target = self
       button.action = #selector(statusItemClicked(_:))
-      button.sendAction(on: [.leftMouseUp, .rightMouseUp])
+      // mouseDown: same phase as NSPopover's click-outside dismiss.
+      button.sendAction(on: [.leftMouseDown, .rightMouseDown])
+    }
+    statusItemMouseDownMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+      self?.armIgnoreIfClickInSlot()
+      return event
     }
 
     popover.behavior = .transient
-    popover.animates = true
+    popover.animates = false
+    popover.delegate = self
     panel = NSHostingController(
       rootView: PanelView(
         store: store,
@@ -68,14 +90,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func tooltip() -> String {
     guard !store.usages.isEmpty else { return "Agent Watcher" }
-    return store.usages.map { usage in
-      guard let tight = usage.tightest() else { return "\(usage.name): no data" }
-      return "\(usage.name): \(Alert.percentLeft(tight.remaining()))% left (\(tight.title))"
-    }.joined(separator: "\n")
+    return store.usages.map { $0.tooltipLine() }.joined(separator: "\n")
   }
 
   @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-    if NSApp.currentEvent?.type == .rightMouseUp {
+    if NSApp.currentEvent?.type == .rightMouseDown {
       showMenu()
     } else {
       togglePopover(sender)
@@ -84,38 +103,144 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func togglePopover(_ sender: NSStatusBarButton) {
     if popover.isShown {
+      // This click is the close. Do not keep the swallow armed for the next one.
+      closingFromToggle = true
+      ignoreToggleUntil = nil
       popover.performClose(sender)
-    } else {
-      store.refreshIfStale()
-      showPopover(below: sender, retry: true)
+      return
     }
+    if let until = ignoreToggleUntil, Date() < until {
+      ignoreToggleUntil = nil
+      return
+    }
+    store.refreshIfStale()
+    showPopover(below: sender)
   }
 
-  /// Opens the panel under the icon. NSPopover picks its edge from the size
-  /// it knows when shown; a stale or not yet measured size could make it
-  /// "not fit" below and flip above the menu bar. So measure first, and if it
-  /// still lands above the icon, reopen it once.
-  private func showPopover(below button: NSStatusBarButton, retry: Bool) {
+  /// Opens the panel under the icon. NSPopover still sometimes picks the
+  /// wrong edge (above the menu bar) a beat after show — SwiftUI's size is
+  /// late, then AppKit re-anchors and flips. Measure, show against a 1-pt
+  /// strip at the button's bottom, then hold the window below the menu bar
+  /// until those layout passes finish.
+  private func showPopover(below button: NSStatusBarButton) {
     NSApp.activate()
     panel.view.layoutSubtreeIfNeeded()
     let size = panel.view.fittingSize
     if size.width > 0, size.height > 0 { popover.contentSize = size }
+    popoverAnchor = button
+    // Whole button, not a 1-pt strip: transient popover treats clicks on the
+    // positioning view as inside. The horseshoe does not fill the slot.
     popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
     popover.contentViewController?.view.window?.makeKey()
+    holdPopoverBelow()
+  }
 
-    guard retry else { return }
-    DispatchQueue.main.async { [weak self] in
-      guard let self, self.popover.isShown,
-            let panelWindow = self.popover.contentViewController?.view.window,
-            let buttonWindow = button.window,
-            panelWindow.frame.midY > buttonWindow.frame.minY
-      else { return }
-      let animates = self.popover.animates
-      self.popover.animates = false
-      self.popover.close()
-      self.popover.animates = animates
-      self.showPopover(below: button, retry: false)
+  func popoverDidShow(_ notification: Notification) {
+    observePopoverFrame()
+    holdPopoverBelow()
+  }
+
+  func popoverDidClose(_ notification: Notification) {
+    stopHoldingPopover()
+    popoverFrameObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    popoverFrameObservers = []
+    pinningPopover = false
+    if closingFromToggle {
+      closingFromToggle = false
+      ignoreToggleUntil = nil
+      return
     }
+    // Click-outside dismissed the panel; the button action may still fire.
+    if statusItemSlotContainsMouse() {
+      ignoreToggleUntil = Date().addingTimeInterval(0.12)
+    }
+  }
+
+  private func armIgnoreIfClickInSlot() {
+    guard popover.isShown, !closingFromToggle, statusItemSlotContainsMouse() else { return }
+    ignoreToggleUntil = Date().addingTimeInterval(0.12)
+  }
+
+  /// The whole status-item window, in screen coordinates — not the painted
+  /// glyph and not a convert through the button, which misses the padding.
+  private func statusItemSlotContainsMouse() -> Bool {
+    guard let window = statusItem.button?.window else { return false }
+    return window.frame.insetBy(dx: -4, dy: -4).contains(NSEvent.mouseLocation)
+  }
+
+  private func observePopoverFrame() {
+    popoverFrameObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    popoverFrameObservers = []
+    guard let window = popover.contentViewController?.view.window else { return }
+    let onResize: @Sendable (Notification) -> Void = { [weak self] _ in
+      Task { @MainActor in self?.holdPopoverBelow() }
+    }
+    // didMove is only honored while `holdBelowUntil` is in the future, so
+    // NSPopover's late flip is undone without a permanent tug-of-war.
+    let onMove: @Sendable (Notification) -> Void = { [weak self] _ in
+      Task { @MainActor in
+        guard let self, let until = self.holdBelowUntil, Date() < until else { return }
+        self.pinPopoverBelowMenuBar()
+      }
+    }
+    popoverFrameObservers = [
+      NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main, using: onResize),
+      NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: window, queue: .main, using: onMove),
+    ]
+  }
+
+  private func stopHoldingPopover() {
+    pinGeneration += 1
+    pendingPins.forEach { $0.cancel() }
+    pendingPins = []
+    holdBelowUntil = nil
+  }
+
+  private func holdPopoverBelow() {
+    pinGeneration += 1
+    let generation = pinGeneration
+    pendingPins.forEach { $0.cancel() }
+    pendingPins = []
+    holdBelowUntil = Date().addingTimeInterval(0.45)
+    pinPopoverBelowMenuBar()
+    for delay in [0.0, 1.0 / 30.0, 0.08, 0.16, 0.3, 0.45] {
+      let work = DispatchWorkItem { [weak self] in
+        guard let self, self.pinGeneration == generation, self.popover.isShown else { return }
+        self.pinPopoverBelowMenuBar()
+      }
+      pendingPins.append(work)
+      DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+  }
+
+  private func pinPopoverBelowMenuBar() {
+    guard !pinningPopover, popover.isShown,
+          let button = popoverAnchor ?? statusItem.button,
+          let window = popover.contentViewController?.view.window,
+          let buttonWindow = button.window else { return }
+    let buttonFrame = buttonWindow.convertToScreen(button.convert(button.bounds, to: nil))
+    let probe = NSPoint(x: buttonFrame.midX, y: buttonFrame.minY - 1)
+    let screen = NSScreen.screens.first { $0.frame.contains(probe) }
+      ?? buttonWindow.screen ?? window.screen ?? NSScreen.main
+    let visible = screen?.visibleFrame ?? window.frame
+    let current = window.frame
+    let ceiling = min(buttonFrame.minY, visible.maxY)
+    let misplaced = current.maxY > ceiling + 1 || current.minY >= buttonFrame.minY - 1
+    let holding = holdBelowUntil.map { Date() < $0 } ?? false
+    guard misplaced || holding else { return }
+
+    var frame = current
+    // Keep NSPopover's X so the arrow still points at the icon.
+    frame.origin.y = ceiling - frame.height
+    if frame.maxX > visible.maxX { frame.origin.x = visible.maxX - frame.width }
+    if frame.minX < visible.minX { frame.origin.x = visible.minX }
+    if frame.minY < visible.minY { frame.origin.y = visible.minY }
+    if frame.maxY > ceiling { frame.origin.y = ceiling - frame.height }
+    guard abs(current.origin.x - frame.origin.x) > 0.5
+            || abs(current.origin.y - frame.origin.y) > 0.5 else { return }
+    pinningPopover = true
+    window.setFrameOrigin(frame.origin)
+    DispatchQueue.main.async { [weak self] in self?.pinningPopover = false }
   }
 
   private func showMenu() {
@@ -163,6 +288,26 @@ if CommandLine.arguments.contains("--dump") {
     done.signal()
   }
   done.wait()
+  exit(0)
+}
+
+// `AgentWatcher --icons <dir>` renders the tray / warning / critical glyphs.
+if let flag = CommandLine.arguments.firstIndex(of: "--icons") {
+  let dir = URL(fileURLWithPath: CommandLine.arguments.count > flag + 1 ? CommandLine.arguments[flag + 1] : ".")
+  try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  MainActor.assumeIsolated {
+    func write(_ image: NSImage, _ name: String) {
+      let big = NSImage(size: NSSize(width: 72, height: 72), flipped: false) { rect in
+        image.draw(in: rect); return true
+      }
+      guard let tiff = big.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff),
+            let png = rep.representation(using: .png, properties: [:]) else { return }
+      try? png.write(to: dir.appendingPathComponent(name))
+    }
+    write(StatusIcon.image(used: 0.45, alert: nil), "icon-tray.png")
+    write(StatusIcon.image(used: 0.82, alert: Alert.orange), "icon-warning.png")
+    write(StatusIcon.image(used: 0.94, alert: Alert.red, critical: true), "icon-critical.png")
+  }
   exit(0)
 }
 

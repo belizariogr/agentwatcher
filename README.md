@@ -10,11 +10,13 @@ in Swift/SwiftUI.
   each window is left (5h session, weekly, per-model limits) and when it
   resets.
 - **Right click**: Refresh / Settings… / Check for Updates… / About / Quit.
-- The icon is a ring with a sparkle in the middle; the ring fills with the
-  tightest window across all harnesses. When any harness has **20% or less**
+- The icon is a **270° horseshoe** with a sparkle in the middle; the arc fills
+  with the tightest account-level window across all harnesses. Model-scoped
+  allowances (Fable) and Cursor's Auto/API pools do not color it; Cursor uses
+  the combined **Overall** usage. When any harness has **20% or less**
   left, the icon leaves the system color and turns **orange**, getting redder
-  as it nears **10%**. At **10% or less** the ring is replaced by a red
-  warning sign. Both thresholds are configurable.
+  as it nears **10%**. At **10% or less** the sparkle in the middle becomes a
+  bang. Both thresholds are configurable.
 
 ## Install
 
@@ -128,7 +130,14 @@ and Cursor. The app does not renew tokens: if Claude's expires, opening Claude
 Code renews it; for Cursor, run `cursor-agent login`.
 
 Cursor's included usage is monthly and split into two pools: **Cursor Models**
-(Auto + Composer) and **Other Models** (third-party models picked by name).
+(Auto + Composer) and **Other Models** (third-party models picked by name). The
+icon uses **Overall**, the combined share of both, not the tighter pool; that
+figure is not drawn as a third bar. Claude's
+model-scoped windows (Fable) show in the panel but do not color the icon. Codex
+shows only the main account allowance (session/weekly, or monthly credit on
+Enterprise); Spark and other model buckets are ignored. The Claude usage request
+identifies as Claude Code (User-Agent from `claude --version`) so Anthropic
+does not park it in the aggressive rate-limit bucket.
 
 If a refresh fails, the panel keeps the last known numbers. A rate limit
 (Anthropic limits the usage endpoint readily) is routine and shown silently;

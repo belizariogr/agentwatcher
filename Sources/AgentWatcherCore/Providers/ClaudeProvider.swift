@@ -9,6 +9,22 @@ public struct ClaudeProvider: UsageProvider {
 
   static let endpoint = URL(string: "https://api.anthropic.com/api/oauth/usage")!
   static let keychainService = "Claude Code-credentials"
+  /// Anthropic rate-limits this endpoint aggressively unless the request looks
+  /// like Claude Code. T3 Code's native path uses the CLI `get_usage` probe
+  /// (4 s); we keep the HTTP endpoint and the CLI's User-Agent instead.
+  static let fallbackUserAgent = "claude-code/2.0.0"
+  static let userAgent: String = {
+    guard let binary = Shell.which("claude"),
+          let raw = Shell.run(binary.path, ["--version"], timeout: 2) else { return fallbackUserAgent }
+    return userAgent(fromVersionOutput: raw)
+  }()
+  static let requestTimeout: TimeInterval = 10
+  static let session: URLSession = {
+    let config = URLSessionConfiguration.ephemeral
+    config.timeoutIntervalForRequest = requestTimeout
+    config.timeoutIntervalForResource = requestTimeout
+    return URLSession(configuration: config)
+  }()
 
   public init() {}
 
@@ -78,13 +94,10 @@ public struct ClaudeProvider: UsageProvider {
     }
     usage.plan = login.plan
 
-    var request = URLRequest(url: Self.endpoint, timeoutInterval: 15)
-    request.setValue("Bearer \(login.accessToken)", forHTTPHeaderField: "Authorization")
-    request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    let request = Self.usageRequest(token: login.accessToken)
 
     do {
-      let (data, response) = try await URLSession.shared.data(for: request)
+      let (data, response) = try await Self.session.data(for: request)
       let status = (response as? HTTPURLResponse)?.statusCode ?? 0
       switch status {
       case 200:
@@ -113,6 +126,24 @@ public struct ClaudeProvider: UsageProvider {
     return usage
   }
 
+  static func usageRequest(token: String) -> URLRequest {
+    var request = URLRequest(url: endpoint, timeoutInterval: requestTimeout)
+    request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+    request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+    return request
+  }
+
+  /// `claude --version` prints e.g. "2.1.69 (Claude Code)".
+  static func userAgent(fromVersionOutput raw: String) -> String {
+    let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard let range = line.range(of: #"\d+\.\d+(?:\.\d+)?"#, options: .regularExpression) else {
+      return fallbackUserAgent
+    }
+    return "claude-code/\(line[range])"
+  }
+
   static func parseLimits(_ payload: JSON) -> [UsageLimit] {
     var limits: [UsageLimit] = []
     func add(_ key: String, _ title: String) {
@@ -122,18 +153,38 @@ public struct ClaudeProvider: UsageProvider {
     add("five_hour", "Session (5h)")
     add("seven_day", "Weekly")
 
-    // Model-scoped windows ("Fable Semanal") live in the `limits` list.
-    var seen = Set<String>()
+    // T3 Code maps hub `limits` the same way: unscoped rows fill Session/Weekly
+    // when the top-level buckets are null; `weekly_scoped` (Fable) is a
+    // model allowance and does not color the icon.
+    var seen = Set(limits.map(\.title))
     for entry in payload["limits"] as? [JSON] ?? [] {
-      guard let model = entry.object("scope")?.object("model"),
-            let modelName = model.string("display_name") ?? model.string("id"),
-            let pct = entry.number("percent"), pct >= 0 else { continue }
+      guard let pct = entry.number("percent") ?? entry.number("utilization"), pct >= 0 else { continue }
       let kind = entry.string("kind") ?? ""
       let window = kind.hasPrefix("weekly") || kind.hasPrefix("seven_day") ? "Weekly"
         : kind.hasPrefix("five_hour") || kind.hasPrefix("session") ? "Session" : ""
-      let title = window.isEmpty ? modelName : "\(modelName) · \(window)"
+      let model = entry.object("scope")?.object("model")
+      let modelName = model?.string("display_name") ?? model?.string("id")
+      let title: String
+      let countsTowardAlert: Bool
+      if let modelName {
+        title = window.isEmpty ? modelName : "\(modelName) · \(window)"
+        countsTowardAlert = false
+      } else if window == "Session" {
+        title = "Session (5h)"
+        countsTowardAlert = true
+      } else if !window.isEmpty {
+        title = window
+        countsTowardAlert = true
+      } else {
+        continue
+      }
       guard seen.insert(title).inserted else { continue }
-      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(entry["resets_at"])))
+      limits.append(UsageLimit(
+        title: title,
+        used: pct / 100,
+        resetsAt: Dates.parse(entry["resets_at"]),
+        countsTowardAlert: countsTowardAlert
+      ))
     }
     return limits
   }

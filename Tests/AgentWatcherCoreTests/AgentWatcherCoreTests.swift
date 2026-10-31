@@ -57,6 +57,29 @@ final class AlertTests: XCTestCase {
     XCTAssertEqual(Alert.worstRemaining([a, b])!, 0.07, accuracy: 1e-9)
   }
 
+  func testModelScopedLimitDoesNotColorTheIcon() {
+    let future = Date().addingTimeInterval(3600)
+    let claude = ProviderUsage(id: "claude", name: "Claude Code", limits: [
+      UsageLimit(title: "Weekly", used: 0.4, resetsAt: future),
+      UsageLimit(title: "Fable · Weekly", used: 1, resetsAt: future, countsTowardAlert: false),
+    ])
+    XCTAssertEqual(claude.tightest()?.title, "Weekly")
+    XCTAssertEqual(Alert.worstRemaining([claude])!, 0.6, accuracy: 1e-9)
+    XCTAssertNil(Alert.level(remaining: Alert.worstRemaining([claude])!, warning: 0.2, critical: 0.1))
+  }
+
+  func testCursorOverallDecidesTheIconNotCursorModels() {
+    let future = Date().addingTimeInterval(3600)
+    let cursor = ProviderUsage(id: "cursor", name: "Cursor", limits: [
+      UsageLimit(title: "Overall", used: 0.8784, resetsAt: future, shownInPanel: false),
+      UsageLimit(title: "Cursor Models", used: 0.9174, resetsAt: future, countsTowardAlert: false),
+      UsageLimit(title: "Other Models", used: 0.4529, resetsAt: future, countsTowardAlert: false),
+    ])
+    XCTAssertEqual(cursor.tightest()?.title, "Overall")
+    XCTAssertEqual(Alert.worstRemaining([cursor])!, 1 - 0.8784, accuracy: 1e-9)
+    XCTAssertEqual(cursor.tooltipLine(), "Cursor: 12% left")
+  }
+
   func testExpiredWindowCountsAsEmpty() {
     let limit = UsageLimit(title: "s", used: 0.99, resetsAt: Date().addingTimeInterval(-1))
     XCTAssertEqual(limit.remaining(), 1)
@@ -93,7 +116,41 @@ final class ClaudeParsingTests: XCTestCase {
     XCTAssertEqual(limits.map(\.title), ["Weekly", "Fable · Weekly"])
     XCTAssertEqual(limits[0].used, 0.93, accuracy: 1e-9)
     XCTAssertNotNil(limits[0].resetsAt)
+    XCTAssertTrue(limits[0].countsTowardAlert)
     XCTAssertEqual(limits[1].used, 0.05, accuracy: 1e-9)
+    XCTAssertFalse(limits[1].countsTowardAlert)
+    XCTAssertEqual(ProviderUsage(id: "claude", name: "Claude Code", limits: limits).tooltipLine(), "Claude Code: 7% left (Weekly)")
+  }
+
+  func testFillsWeeklyFromUnscopedLimitsWhenTopLevelBucketIsMissing() {
+    let payload: [String: Any] = [
+      "five_hour": NSNull(),
+      "seven_day": NSNull(),
+      "limits": [
+        ["kind": "weekly_all", "percent": 40, "resets_at": "2026-11-02T07:00:00Z", "scope": NSNull()],
+        ["kind": "weekly_scoped", "percent": 100, "resets_at": "2026-11-02T07:00:00Z",
+         "scope": ["model": ["display_name": "Fable"]]],
+      ],
+    ]
+    let limits = ClaudeProvider.parseLimits(payload)
+    XCTAssertEqual(limits.map(\.title), ["Weekly", "Fable · Weekly"])
+    XCTAssertTrue(limits[0].countsTowardAlert)
+    XCTAssertFalse(limits[1].countsTowardAlert)
+    XCTAssertEqual(limits[0].used, 0.4, accuracy: 1e-9)
+    XCTAssertEqual(limits[1].used, 1, accuracy: 1e-9)
+  }
+
+  func testUsageRequestLooksLikeClaudeCode() {
+    let request = ClaudeProvider.usageRequest(token: "tok")
+    XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), ClaudeProvider.userAgent)
+    XCTAssertTrue(request.value(forHTTPHeaderField: "User-Agent")?.hasPrefix("claude-code/") == true)
+    XCTAssertEqual(request.value(forHTTPHeaderField: "anthropic-beta"), "oauth-2025-04-20")
+    XCTAssertEqual(request.timeoutInterval, ClaudeProvider.requestTimeout)
+  }
+
+  func testUserAgentFromClaudeVersionOutput() {
+    XCTAssertEqual(ClaudeProvider.userAgent(fromVersionOutput: "2.1.69 (Claude Code)\n"), "claude-code/2.1.69")
+    XCTAssertEqual(ClaudeProvider.userAgent(fromVersionOutput: "not a version"), ClaudeProvider.fallbackUserAgent)
   }
 
   func testPlanLabel() {
@@ -123,11 +180,52 @@ final class CodexParsingTests: XCTestCase {
     XCTAssertNotNil(parsed.limits[0].resetsAt)
   }
 
-  func testModelBucketIsTitledByName() {
-    let general: [String: Any] = ["primary": ["usedPercent": 10, "windowDurationMins": 300]]
-    let model: [String: Any] = ["limitName": "GPT-5 Pro", "secondary": ["usedPercent": 50, "windowDurationMins": 10080]]
-    let parsed = CodexProvider.parse(["rateLimitsByLimitId": ["codex": general, "gpt5pro": model]])
-    XCTAssertEqual(parsed.limits.map(\.title), ["Session (5h)", "GPT-5 Pro · Weekly"])
+  func testIgnoresModelBucketsAndKeepsTheMainCodexAllowance() {
+    let spark: [String: Any] = [
+      "limitId": "codex_bengalfox",
+      "primary": ["usedPercent": 0, "windowDurationMins": 300],
+      "secondary": ["usedPercent": 90, "windowDurationMins": 10080],
+    ]
+    let parsed = CodexProvider.parse([
+      "rateLimits": spark,
+      "rateLimitsByLimitId": [
+        "codex_bengalfox": spark,
+        "codex": ["secondary": ["usedPercent": 42, "windowDurationMins": 10080]] as JSON,
+        "gpt5pro": ["limitName": "GPT-5 Pro", "secondary": ["usedPercent": 50, "windowDurationMins": 10080]] as JSON,
+      ] as JSON,
+    ])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Weekly"])
+    XCTAssertEqual(parsed.limits[0].used, 0.42, accuracy: 1e-9)
+  }
+
+  func testSparkOnlySnapshotIsIgnored() {
+    let spark: [String: Any] = [
+      "limitId": "codex_bengalfox",
+      "planType": "plus",
+      "primary": ["usedPercent": 0, "windowDurationMins": 300],
+      "secondary": ["usedPercent": 90, "windowDurationMins": 10080],
+    ]
+    let parsed = CodexProvider.parse(["rateLimits": spark, "rateLimitsByLimitId": ["codex_bengalfox": spark] as JSON])
+    XCTAssertEqual(parsed.plan, "Plus")
+    XCTAssertEqual(parsed.limits, [])
+  }
+
+  func testFreePlanWithoutDurationIsMonthly() {
+    let parsed = CodexProvider.parse(["rateLimits": ["planType": "free", "primary": ["usedPercent": 80] as JSON] as JSON])
+    XCTAssertEqual(parsed.plan, "Free")
+    XCTAssertEqual(parsed.limits.map(\.title), ["Monthly"])
+    XCTAssertEqual(parsed.limits[0].used, 0.8, accuracy: 1e-9)
+  }
+
+  func testEnterpriseMonthlyCreditLimit() {
+    let parsed = CodexProvider.parse(["rateLimitsByLimitId": ["codex": [
+      "planType": "enterprise_cbp_usage_based",
+      "individualLimit": ["remainingPercent": 99, "resetsAt": 1_784_500_000],
+    ] as JSON]])
+    XCTAssertEqual(parsed.plan, "Enterprise")
+    XCTAssertEqual(parsed.limits.map(\.title), ["Monthly credit"])
+    XCTAssertEqual(parsed.limits[0].used, 0.01, accuracy: 1e-9)
+    XCTAssertEqual(parsed.limits[0].resetsAt, Date(timeIntervalSince1970: 1_784_500_000))
   }
 }
 
@@ -136,9 +234,26 @@ final class CursorParsingTests: XCTestCase {
     let raw = #"{"billingCycleStart":"1791982045000","billingCycleEnd":"1794660445000","planUsage":{"totalSpend":115072,"includedSpend":7000,"limit":7000,"autoPercentUsed":91.74,"apiPercentUsed":45.29,"totalPercentUsed":87.84},"enabled":true}"#
     let payload = try XCTUnwrap(try JSONSerialization.jsonObject(with: Data(raw.utf8)) as? JSON)
     let limits = CursorProvider.parseLimits(payload)
-    XCTAssertEqual(limits.map(\.title), ["Cursor Models", "Other Models"])
-    XCTAssertEqual(limits[0].used, 0.9174, accuracy: 1e-6)
+    XCTAssertEqual(limits.map(\.title), ["Overall", "Cursor Models", "Other Models"])
+    XCTAssertEqual(limits[0].used, 0.8784, accuracy: 1e-6)
+    XCTAssertTrue(limits[0].countsTowardAlert)
+    XCTAssertFalse(limits[0].shownInPanel)
+    XCTAssertEqual(limits[1].used, 0.9174, accuracy: 1e-6)
+    XCTAssertFalse(limits[1].countsTowardAlert)
+    XCTAssertTrue(limits[1].shownInPanel)
+    XCTAssertFalse(limits[2].countsTowardAlert)
+    XCTAssertTrue(limits[2].shownInPanel)
     XCTAssertEqual(limits[0].resetsAt, Date(timeIntervalSince1970: 1794660445))
+    let usage = ProviderUsage(id: "cursor", name: "Cursor", limits: limits)
+    XCTAssertEqual(usage.visibleLimits.map(\.title), ["Cursor Models", "Other Models"])
+    XCTAssertEqual(usage.tightest()?.title, "Overall")
+    XCTAssertEqual(usage.tooltipLine(), "Cursor: 12% left")
+  }
+
+  func testPoolsCountTowardAlertWhenOverallIsMissing() {
+    let limits = CursorProvider.parseLimits(["planUsage": ["autoPercentUsed": 91.74, "apiPercentUsed": 45.29] as JSON])
+    XCTAssertEqual(limits.map(\.title), ["Cursor Models", "Other Models"])
+    XCTAssertTrue(limits.allSatisfy(\.countsTowardAlert))
   }
 
   func testFallsBackToIncludedSpend() {
@@ -310,6 +425,15 @@ final class LoggedOutTests: XCTestCase {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString).json")
     try Data(#"{"savedAt":"2026-10-31T16:11:12Z","usages":[{"id":"a","name":"A","limits":[{"title":"w","used":0.5}]}]}"#.utf8).write(to: url)
     XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.used, 0.5)
+    XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.countsTowardAlert, true)
+    XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.shownInPanel, true)
+  }
+
+  func testCachedOverallWithoutShownFlagStaysOffThePanel() throws {
+    let url = FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString).json")
+    try Data(#"{"savedAt":"2026-10-31T16:11:12Z","usages":[{"id":"cursor","name":"Cursor","limits":[{"title":"Overall","used":0.8},{"title":"Cursor Models","used":0.9}]}]}"#.utf8).write(to: url)
+    let limits = UsageCache(url: url).load().first?.limits ?? []
+    XCTAssertEqual(limits.map(\.shownInPanel), [false, true])
   }
 }
 
@@ -322,12 +446,12 @@ final class ReviewFixTests: XCTestCase {
     XCTAssertFalse(CodexProvider.isLoginError("authorization server unavailable"))
   }
 
-  func testCodexWindowsWithoutDurationGetUniqueTitles() {
+  func testCodexWindowsWithoutDurationUsePaidFallbacks() {
     let parsed = CodexProvider.parse(["rateLimits": [
       "primary": ["usedPercent": 10] as JSON,
       "secondary": ["usedPercent": 20] as JSON,
     ] as JSON])
-    XCTAssertEqual(parsed.limits.map(\.title), ["Limit", "Limit (secondary)"])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Session (5h)", "Weekly"])
   }
 
   func testCursorTriesUnexpiredLoginsFirst() {
