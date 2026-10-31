@@ -1,4 +1,4 @@
-.PHONY: build app install run test clean icon
+.PHONY: build app install run test clean icon release
 
 build:
 	swift build
@@ -26,3 +26,7 @@ clean:
 # make icon PALETTE=aurora BG=light  (options: scripts/app_icon.py --list)
 icon:
 	./scripts/make-icon.sh $(or $(PALETTE),ocean) $(or $(BG),black)
+
+# Universal, Developer ID signed, notarized DMG in build/ (see scripts/release.sh)
+release:
+	./scripts/release.sh

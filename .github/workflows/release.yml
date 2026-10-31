@@ -1,0 +1,89 @@
+name: Release
+
+# Push a tag like v0.2.0 to build, sign, notarize and publish a GitHub Release.
+# Run it by hand to get a signed DMG as an artifact without publishing.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      notarize:
+        description: Notarize the DMG
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # version from tags, build number from the commit count
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -1)"
+          swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Check the tag matches a version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: '[[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3"; exit 1; }'
+
+      - name: Write the temporary certificate
+        env:
+          MACOS_P12_BASE64: ${{ secrets.MACOS_P12_BASE64 }}
+        run: |
+          [[ -n "$MACOS_P12_BASE64" ]] || { echo "::error::Secret MACOS_P12_BASE64 is missing (scripts/setup-github-secrets.py)"; exit 1; }
+          umask 077
+          base64 --decode <<<"$MACOS_P12_BASE64" >"$RUNNER_TEMP/developer-id.p12"
+
+      - name: Build, sign, notarize
+        env:
+          MACOS_P12_FILE: ${{ runner.temp }}/developer-id.p12
+          MACOS_P12_PASSWORD: ${{ secrets.MACOS_P12_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+          SKIP_NOTARIZE: ${{ (github.event_name == 'workflow_dispatch' && !inputs.notarize) && '1' || '0' }}
+        run: ./scripts/release.sh
+
+      - name: Remove the temporary certificate
+        if: always()
+        run: rm -f "$RUNNER_TEMP/developer-id.p12"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: AgentWatcher-dmg
+          path: build/AgentWatcher-*.dmg
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: AgentWatcher-dmg
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shasum -a 256 AgentWatcher-*.dmg | tee SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" AgentWatcher-*.dmg SHA256SUMS.txt \
+            --repo "$GITHUB_REPOSITORY" --title "Agent Watcher ${GITHUB_REF_NAME#v}" --generate-notes

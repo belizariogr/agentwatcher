@@ -39,6 +39,33 @@ make icon PALETTE=aurora BG=light && make run
 # backgrounds: black (default), dark, graphite, light, color
 ```
 
+## Releases
+
+Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml` on a macOS runner:
+tests, a universal (Apple silicon + Intel) build, Developer ID signature with
+hardened runtime, DMG, notarization and stapling, then a GitHub Release with
+the DMG and its SHA-256.
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Running the workflow by hand (Actions → Release → Run workflow) produces the
+signed DMG as an artifact without publishing.
+
+The workflow reads these Secrets: `MACOS_P12_BASE64`, `MACOS_P12_PASSWORD`,
+`MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_PASSWORD` (and optionally
+`MACOS_TEAM_ID`, `MACOS_CODESIGN_IDENTITY`). Send them from a `.env` without
+printing values:
+
+```bash
+scripts/setup-github-secrets.py            # dry run: lists what would be sent
+scripts/setup-github-secrets.py --apply    # reads ./.env, or ../bgdesk/.env
+```
+
+The same pipeline runs locally with `make release`, reading `./.env` (see
+`.env.example`); `SKIP_NOTARIZE=1 make release` only signs.
+
 ## Where the numbers come from
 
 | Harness | Limits | Credentials |

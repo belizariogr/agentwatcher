@@ -3,11 +3,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-VERSION="${VERSION:-$(git describe --tags --always 2>/dev/null | sed 's/^v//' || echo 0.1.0)}"
+# Version from the nearest vX.Y.Z tag; build number from the commit count.
+VERSION="${VERSION:-$( (git describe --tags --abbrev=0 --match 'v[0-9]*' 2>/dev/null || true) | sed 's/^v//')}"
+VERSION="${VERSION:-0.0.0}"
+BUILD_NUMBER="${BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 APP="build/AgentWatcher.app"
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)/AgentWatcher"
+# UNIVERSAL=1 builds one binary for Apple silicon and Intel (used for releases).
+ARCH_ARGS=()
+if [[ "${UNIVERSAL:-0}" == "1" ]]; then ARCH_ARGS=(--arch arm64 --arch x86_64); fi
+swift build -c release ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"}
+BIN="$(swift build -c release ${ARCH_ARGS[@]+"${ARCH_ARGS[@]}"} --show-bin-path)/AgentWatcher"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -27,7 +33,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${VERSION}</string>
-  <key>CFBundleVersion</key><string>${VERSION}</string>
+  <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -35,5 +41,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
+# Ad-hoc signature for local runs; scripts/release.sh re-signs with Developer ID.
 codesign --force --sign - "$APP" >/dev/null
 echo "$APP"
