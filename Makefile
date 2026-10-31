@@ -23,6 +23,6 @@ run: app
 clean:
 	rm -rf .build build
 
-# make icon PALETTE=aurora  (palettes: scripts/app_icon.py --list)
+# make icon PALETTE=aurora BG=claro  (options: scripts/app_icon.py --list)
 icon:
-	./scripts/make-icon.sh $(or $(PALETTE),oceano)
+	./scripts/make-icon.sh $(or $(PALETTE),oceano) $(or $(BG),preto)

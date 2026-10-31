@@ -33,7 +33,9 @@ O ícone ("Faísca Neon") é gerado por `scripts/app_icon.py` em
 `librsvg`):
 
 ```bash
-make icon PALETTE=aurora && make run   # oceano, aurora, lilas, ambar, gelo
+make icon PALETTE=aurora BG=claro && make run
+# paletas: oceano, aurora, lilas, ambar, gelo
+# fundos:  preto (padrão), escuro, grafite, claro, cor
 ```
 
 ## De onde vêm os números

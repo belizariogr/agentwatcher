@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Draw the Agent Watcher app icon (a sparkle inside a usage ring) as SVG.
 
-  scripts/app_icon.py <palette> <out.svg>
+  scripts/app_icon.py <palette> <out.svg> [background]
   scripts/app_icon.py --list
 """
 import math, sys
@@ -13,6 +13,16 @@ PALETTES = {
   "lilas":  (("#f5d0fe", "#c084fc", "#6366f1"), "#2a1846", "#07040e"),
   "ambar":  (("#fde68a", "#fb923c", "#e11d48"), "#33190c", "#0a0503"),
   "gelo":   (("#ffffff", "#bae6fd", "#60a5fa"), "#1e2a44", "#020617"),
+}
+
+# name: (background center, background edge, ring track color, track opacity)
+# None for the colors means "derive from the palette".
+BACKGROUNDS = {
+  "escuro":  (None, None, "#fff", .08),          # dark, tinted by the palette
+  "preto":   ("#1c1c1e", "#000000", "#fff", .08),
+  "grafite": ("#4a4d55", "#24262c", "#fff", .10),
+  "claro":   ("#ffffff", "#e4e6eb", "#000", .07),
+  "cor":     ("c1", "c2", "#fff", .18),          # palette gradient, white glyph
 }
 
 def pt(cx, cy, r, a):
@@ -30,18 +40,25 @@ def sparkle(cx, cy, s, fill):
           f'C{cx+k} {cy+k*0.6} {cx+k*0.6} {cy+k} {cx} {cy+s} C{cx-k*0.6} {cy+k} {cx-k} {cy+k*0.6} {cx-s} {cy} '
           f'C{cx-k} {cy-k*0.6} {cx-k*0.6} {cy-k} {cx} {cy-s}Z"/>')
 
-def svg(palette):
-  (c0, c1, c2), bg0, bg1 = PALETTES[palette]
+def svg(palette, background="escuro"):
+  (c0, c1, c2), tint0, tint1 = PALETTES[palette]
+  bg0, bg1, track, track_op = BACKGROUNDS[background]
+  colors = {"c0": c0, "c1": c1, "c2": c2}
+  bg0 = tint0 if bg0 is None else colors.get(bg0, bg0)
+  bg1 = tint1 if bg1 is None else colors.get(bg1, bg1)
+  if background == "cor":
+    c0 = c1 = c2 = "#ffffff"
+  shine = .10 if background == "claro" else .16
   return f'''<svg viewBox="0 0 1024 1024" width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
 <defs>
-<radialGradient id="bg" cx=".5" cy=".35" r=".8"><stop offset="0" stop-color="{bg0}"/><stop offset="1" stop-color="{bg1}"/></radialGradient>
-<linearGradient id="shine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".16"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>
+<radialGradient id="bg" cx=".5" cy=".3" r=".85"><stop offset="0" stop-color="{bg0}"/><stop offset="1" stop-color="{bg1}"/></radialGradient>
+<linearGradient id="shine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="{shine}"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>
 <linearGradient id="sp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c0}"/><stop offset=".5" stop-color="{c1}"/><stop offset="1" stop-color="{c2}"/></linearGradient>
 <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-opacity=".35"/></filter>
 <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="22" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
 </defs>
 <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
-<circle cx="512" cy="512" r="290" fill="none" stroke="#fff" stroke-opacity=".08" stroke-width="22"/>
+<circle cx="512" cy="512" r="290" fill="none" stroke="{track}" stroke-opacity="{track_op}" stroke-width="22"/>
 <path d="{arc(512, 512, 290, 0, 250)}" fill="none" stroke="url(#sp)" stroke-width="22" stroke-linecap="round" filter="url(#glow)"/>
 <g filter="url(#glow)">{sparkle(512, 512, 210, "url(#sp)")}</g>
 <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#shine)"/>
@@ -50,6 +67,6 @@ def svg(palette):
 
 if __name__ == "__main__":
   if sys.argv[1:] == ["--list"]:
-    print("\n".join(PALETTES)); sys.exit()
+    print("palettes:", " ".join(PALETTES)); print("backgrounds:", " ".join(BACKGROUNDS)); sys.exit()
   palette, out = sys.argv[1], sys.argv[2]
-  open(out, "w").write(svg(palette))
+  open(out, "w").write(svg(palette, sys.argv[3] if len(sys.argv) > 3 else "escuro"))
