@@ -9,7 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private var statusItem: NSStatusItem!
   private let popover = NSPopover()
   private var cancellables = Set<AnyCancellable>()
-  private lazy var settings = SettingsWindowController(store: store)
+  private let updater = Updater()
+  private lazy var settings = SettingsWindowController(store: store, updater: updater)
+  private lazy var about = AboutWindowController(updater: updater)
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
@@ -24,7 +26,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     popover.contentViewController = NSHostingController(
       rootView: PanelView(
         store: store,
+        updater: updater,
         onOpenSettings: { [weak self] in self?.openSettings() },
+        onOpenAbout: { [weak self] in self?.openAbout() },
         onQuit: { NSApp.terminate(nil) }
       )
     )
@@ -44,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     updateIcon()
     store.start()
+
+    // Don't swap the app out from under an open panel or a menu.
+    updater.isBusy = { [weak self] in self?.popover.isShown ?? false }
+    updater.onWillRelaunch = { NSApp.terminate(nil) }
+    updater.start()
   }
 
   private func updateIcon() {
@@ -84,6 +93,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let menu = NSMenu()
     menu.addItem(withTitle: "Refresh", action: #selector(refreshNow), keyEquivalent: "r").target = self
     menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+    menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
+    menu.addItem(withTitle: "About Agent Watcher", action: #selector(openAbout), keyEquivalent: "").target = self
     menu.addItem(.separator())
     menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     statusItem.menu = menu
@@ -92,6 +103,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   }
 
   @objc private func refreshNow() { store.refresh() }
+
+  @objc private func checkForUpdates() {
+    updater.check()
+    openAbout()
+  }
+
+  @objc private func openAbout() {
+    popover.performClose(nil)
+    about.show()
+  }
 
   @objc private func openSettings() {
     popover.performClose(nil)
@@ -133,12 +154,15 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
       try? png.write(to: dir.appendingPathComponent(name))
     }
     for scheme in [ColorScheme.light, .dark] {
-      let renderer = ImageRenderer(content: PanelView(store: store, onOpenSettings: {}, onQuit: {})
+      let renderer = ImageRenderer(content: PanelView(store: store, updater: Updater(), onOpenSettings: {}, onQuit: {})
         .background(scheme == .dark ? Color(white: 0.16) : Color(white: 0.96))
         .environment(\.colorScheme, scheme))
       renderer.scale = 2
       write(renderer.nsImage, "panel-\(scheme == .dark ? "dark" : "light").png")
     }
+    let about = ImageRenderer(content: AboutView(updater: Updater()).background(Color(white: 0.96)))
+    about.scale = 2
+    write(about.nsImage, "about.png")
     let icon = StatusIcon.image(used: store.worstRemaining.map { 1 - $0 }, severity: store.severity)
     let big = NSImage(size: NSSize(width: 72, height: 72), flipped: false) { rect in
       icon.draw(in: rect); return true

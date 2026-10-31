@@ -3,7 +3,9 @@ import SwiftUI
 
 struct PanelView: View {
   @ObservedObject var store: UsageStore
+  @ObservedObject var updater: Updater
   var onOpenSettings: () -> Void
+  var onOpenAbout: () -> Void = {}
   var onQuit: () -> Void
 
   var body: some View {
@@ -22,6 +24,8 @@ struct PanelView: View {
           ProviderCard(usage: usage, threshold: store.alertThreshold)
         }
       }
+
+      updateBanner
 
       Divider()
       footer
@@ -61,6 +65,29 @@ struct PanelView: View {
     }
   }
 
+  @ViewBuilder private var updateBanner: some View {
+    switch updater.state {
+    case .available(let release):
+      HStack(spacing: 8) {
+        Image(systemName: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
+        Text("Version \(release.version.description) is available").font(.callout)
+        Spacer()
+        if updater.notInstallableReason == nil {
+          Button("Install") { updater.install(release) }.controlSize(.small)
+        } else {
+          Button("Download") { NSWorkspace.shared.open(release.pageURL) }.controlSize(.small)
+        }
+      }
+    case .installing(let release):
+      HStack(spacing: 8) {
+        ProgressView().controlSize(.small).scaleEffect(0.75).frame(width: 16, height: 16)
+        Text("Installing \(release.version.description)…").font(.callout).foregroundStyle(.secondary)
+      }
+    default:
+      EmptyView()
+    }
+  }
+
   private var footer: some View {
     HStack {
       Button {
@@ -70,6 +97,12 @@ struct PanelView: View {
       }
       .buttonStyle(.borderless)
       .keyboardShortcut(",")
+      Button {
+        onOpenAbout()
+      } label: {
+        Label("About", systemImage: "info.circle")
+      }
+      .buttonStyle(.borderless)
       Spacer()
       Button("Quit", action: onQuit)
         .buttonStyle(.borderless)

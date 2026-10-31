@@ -9,7 +9,7 @@ in Swift/SwiftUI.
 - **Left click** the icon: a panel with each harness, its plan, how much of
   each window is left (5h session, weekly, per-model limits) and when it
   resets.
-- **Right click**: Refresh / Settings… / Quit.
+- **Right click**: Refresh / Settings… / Check for Updates… / About / Quit.
 - The icon is a ring with a sparkle in the middle; the ring fills with the
   tightest window across all harnesses. When any harness has **15% or less**
   left (configurable), the icon leaves the system color and goes yellow →
@@ -65,6 +65,29 @@ scripts/setup-github-secrets.py --apply    # reads ./.env, or ../bgdesk/.env
 
 The same pipeline runs locally with `make release`, reading `./.env` (see
 `.env.example`); `SKIP_NOTARIZE=1 make release` only signs.
+
+## Updates
+
+The app checks `GET https://api.github.com/repos/belizariogr/agentwatcher/releases/latest`
+20 s after launch and then every 6 hours (prereleases and drafts are ignored).
+When the release's tag is newer than `CFBundleShortVersionString`, it:
+
+1. downloads the `AgentWatcher-*.dmg` asset and checks it against `SHA256SUMS.txt`;
+2. mounts it and copies the app next to the installed one;
+3. refuses it unless it is intact, has the bundle id `com.belizariogr.agentwatcher`
+   and a Developer ID signature from team `3Z7C3Q7NMT`;
+4. swaps the bundle in place, quits and reopens.
+
+The install waits while the panel is open. Local builds (`make install`, ad-hoc
+signed) only show that a release exists and never replace themselves; a copy in
+a folder the user can't write to (or run from the DMG) links to the release page.
+Settings › Updates turns checking and automatic install on or off; the right-click
+menu has **Check for Updates…** and **About Agent Watcher**.
+
+```bash
+defaults write com.belizariogr.agentwatcher checkForUpdates -bool false
+defaults write com.belizariogr.agentwatcher installUpdatesAutomatically -bool false
+```
 
 ## Where the numbers come from
 
