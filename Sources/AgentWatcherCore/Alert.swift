@@ -9,26 +9,59 @@ public struct RGB: Equatable, Sendable {
   }
 }
 
-/// How alarming a remaining allowance is. Nothing happens while more than
-/// `threshold` is left; from there the color walks yellow → orange → red,
-/// arriving at red when the allowance is gone.
-public enum Alert {
-  public static let defaultThreshold = 0.15
+/// How alarming a remaining allowance is: nothing while more than the
+/// warning threshold is left, warning at or below it, critical at or below
+/// the critical threshold.
+public enum AlertLevel: Equatable, Sendable {
+  case warning, critical
+}
 
-  public static let yellow = RGB(0.98, 0.80, 0.18)
+public enum Alert {
+  public static let defaultWarning = 0.20
+  public static let defaultCritical = 0.10
+  /// The settings' slider step, and the closest the two thresholds may get.
+  public static let step = 0.01
+
   public static let orange = RGB(1.00, 0.55, 0.15)
   public static let red = RGB(0.96, 0.20, 0.24)
 
-  /// nil while above the threshold, else 0 (just crossed) ... 1 (exhausted).
-  public static func severity(remaining: Double, threshold: Double = defaultThreshold) -> Double? {
-    guard threshold > 0, remaining <= threshold else { return nil }
-    let left = min(max(remaining, 0), threshold)
-    return 1 - left / threshold
+  public static func level(
+    remaining: Double, warning: Double = defaultWarning, critical: Double = defaultCritical
+  ) -> AlertLevel? {
+    // Compare the whole percent the panel shows, so "10% left" counts as
+    // 10% even when it is really 10.9%.
+    let shown = percentLeft(remaining)
+    if shown <= wholePercent(critical) { return .critical }
+    if shown <= wholePercent(warning) { return .warning }
+    return nil
   }
 
-  public static func color(severity: Double) -> RGB {
-    let s = min(max(severity, 0), 1)
-    return s < 0.5 ? yellow.mix(orange, s / 0.5) : orange.mix(red, (s - 0.5) / 0.5)
+  /// The whole percent left as shown everywhere: truncated, so 10.9% reads
+  /// "10% left". The epsilon keeps 0.29 from reading as 28%.
+  public static func percentLeft(_ remaining: Double) -> Int {
+    min(max(Int((remaining * 100 + 1e-9).rounded(.down)), 0), 100)
+  }
+
+  /// Thresholds are whole percents already; this only absorbs float noise.
+  static func wholePercent(_ fraction: Double) -> Int { Int((fraction * 100).rounded()) }
+
+  public static func color(_ level: AlertLevel) -> RGB {
+    switch level {
+    case .warning: orange
+    case .critical: red
+    }
+  }
+
+  /// The color for a remaining allowance: none above the warning threshold,
+  /// orange right at it, sliding toward red as it nears the critical
+  /// threshold, and solid red from there down.
+  public static func color(
+    remaining: Double, warning: Double = defaultWarning, critical: Double = defaultCritical
+  ) -> RGB? {
+    guard let level = level(remaining: remaining, warning: warning, critical: critical) else { return nil }
+    guard level == .warning, warning > critical else { return red }
+    let t = (warning - remaining) / (warning - critical)
+    return orange.mix(red, min(max(t, 0), 1))
   }
 
   /// The tightest window across every harness decides the icon.

@@ -58,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func updateIcon() {
     guard let button = statusItem.button else { return }
     let worst = store.worstRemaining
-    button.image = StatusIcon.image(used: worst.map { 1 - $0 }, severity: store.severity)
+    button.image = StatusIcon.image(used: worst.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical)
     button.toolTip = tooltip()
   }
 
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     guard !store.usages.isEmpty else { return "Agent Watcher" }
     return store.usages.map { usage in
       guard let tight = usage.tightest() else { return "\(usage.name): no data" }
-      return "\(usage.name): \(Int((tight.remaining() * 100).rounded()))% left (\(tight.title))"
+      return "\(usage.name): \(Alert.percentLeft(tight.remaining()))% left (\(tight.title))"
     }.joined(separator: "\n")
   }
 
@@ -128,7 +128,7 @@ if CommandLine.arguments.contains("--dump") {
       let usage = await provider.fetch()
       print("\(usage.name) [\(usage.plan ?? "-")]\(usage.message.map { " ! \($0)" } ?? "")")
       for limit in usage.limits {
-        print("  \(limit.title): \(Int(((1 - limit.used) * 100).rounded()))% left, resets \(limit.resetsAt.map { "\($0)" } ?? "-")")
+        print("  \(limit.title): \(Alert.percentLeft(1 - limit.used))% left, resets \(limit.resetsAt.map { "\($0)" } ?? "-")")
       }
     }
     done.signal()
@@ -163,7 +163,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
     let about = ImageRenderer(content: AboutView(updater: Updater()).background(Color(white: 0.96)))
     about.scale = 2
     write(about.nsImage, "about.png")
-    let icon = StatusIcon.image(used: store.worstRemaining.map { 1 - $0 }, severity: store.severity)
+    let icon = StatusIcon.image(used: store.worstRemaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical)
     let big = NSImage(size: NSSize(width: 72, height: 72), flipped: false) { rect in
       icon.draw(in: rect); return true
     }

@@ -11,9 +11,10 @@ in Swift/SwiftUI.
   resets.
 - **Right click**: Refresh / Settings… / Check for Updates… / About / Quit.
 - The icon is a ring with a sparkle in the middle; the ring fills with the
-  tightest window across all harnesses. When any harness has **15% or less**
-  left (configurable), the icon leaves the system color and goes yellow →
-  orange → **red** at 0%.
+  tightest window across all harnesses. When any harness has **20% or less**
+  left, the icon leaves the system color and turns **orange**, getting redder
+  as it nears **10%**. At **10% or less** the ring is replaced by a red
+  warning sign. Both thresholds are configurable.
 
 ## Install
 
@@ -143,7 +144,8 @@ The **Settings** button (⌘,) at the bottom of the panel opens a window with:
 
 - refresh interval (1 min to 1 h; default 5 min);
 - launch at login;
-- icon alert threshold (5–50% left; default 15%);
+- alert thresholds: orange (1–50% left; default 20%) and red (0–49% left;
+  default 10%, always below orange);
 - hiding harnesses from the panel and the icon.
 
 The same options live in `UserDefaults`, so they can be set from the terminal
@@ -152,8 +154,10 @@ too:
 ```bash
 # Refresh interval in seconds (default 300, minimum 60)
 defaults write com.belizariogr.agentwatcher refreshInterval -int 600
-# Fraction left at which the icon starts changing color (default 0.15)
-defaults write com.belizariogr.agentwatcher alertThreshold -float 0.2
+# Fraction left at which the icon turns orange (default 0.2)
+defaults write com.belizariogr.agentwatcher alertThreshold -float 0.25
+# Fraction left at which the icon turns red (default 0.1; must be below orange)
+defaults write com.belizariogr.agentwatcher criticalThreshold -float 0.1
 # Hidden harnesses (ids: claude, codex, cursor)
 defaults write com.belizariogr.agentwatcher hiddenProviders -array codex
 ```

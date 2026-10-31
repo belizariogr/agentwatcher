@@ -11,7 +11,9 @@ public final class UsageStore: ObservableObject {
 
   public enum Keys {
     public static let refreshInterval = "refreshInterval"
-    public static let alertThreshold = "alertThreshold"
+    /// Kept under its old name: it was the single threshold before there were two.
+    public static let warningThreshold = "alertThreshold"
+    public static let criticalThreshold = "criticalThreshold"
     public static let hiddenProviders = "hiddenProviders"
   }
 
@@ -26,9 +28,25 @@ public final class UsageStore: ObservableObject {
     }
   }
 
-  /// Share of an allowance left at which the icon starts turning red.
-  @Published public var alertThreshold: Double {
-    didSet { defaults.set(alertThreshold, forKey: Keys.alertThreshold) }
+  /// Share of an allowance left at which the icon turns orange.
+  @Published public var warningThreshold: Double {
+    didSet {
+      defaults.set(warningThreshold, forKey: Keys.warningThreshold)
+      // Red always sits below orange.
+      if criticalThreshold > warningThreshold - Alert.step / 2 {
+        criticalThreshold = max(0, warningThreshold - Alert.step)
+      }
+    }
+  }
+
+  /// Share of an allowance left at which the icon turns red.
+  @Published public var criticalThreshold: Double {
+    didSet {
+      defaults.set(criticalThreshold, forKey: Keys.criticalThreshold)
+      if warningThreshold < criticalThreshold + Alert.step / 2 {
+        warningThreshold = criticalThreshold + Alert.step
+      }
+    }
   }
 
   /// Harnesses the user chose not to watch: not fetched, not shown, and
@@ -54,8 +72,15 @@ public final class UsageStore: ObservableObject {
     self.cache = cacheURL.map(UsageCache.init(url:))
     let interval = defaults.double(forKey: Keys.refreshInterval)
     refreshInterval = interval >= 60 ? interval : 300
-    let threshold = defaults.double(forKey: Keys.alertThreshold)
-    alertThreshold = threshold > 0 && threshold < 1 ? threshold : Alert.defaultThreshold
+    let storedWarning = defaults.double(forKey: Keys.warningThreshold)
+    let warning = storedWarning > 0 && storedWarning < 1 ? storedWarning : Alert.defaultWarning
+    let storedCritical = defaults.object(forKey: Keys.criticalThreshold) as? Double
+    warningThreshold = warning
+    if let storedCritical, storedCritical >= 0, storedCritical < warning {
+      criticalThreshold = storedCritical
+    } else {
+      criticalThreshold = Alert.defaultCritical < warning ? Alert.defaultCritical : max(0, warning - Alert.step)
+    }
     hiddenProviders = Set(defaults.stringArray(forKey: Keys.hiddenProviders) ?? [])
     // Last known numbers, so a rate-limited first refresh after launch still
     // has something to show and to fall back on.
@@ -133,8 +158,17 @@ public final class UsageStore: ObservableObject {
 
   public var worstRemaining: Double? { Alert.worstRemaining(usages) }
 
-  public var severity: Double? {
-    worstRemaining.flatMap { Alert.severity(remaining: $0, threshold: alertThreshold) }
+  public var alertLevel: AlertLevel? {
+    worstRemaining.flatMap { alertLevel(remaining: $0) }
+  }
+
+  public func alertLevel(remaining: Double) -> AlertLevel? {
+    Alert.level(remaining: remaining, warning: warningThreshold, critical: criticalThreshold)
+  }
+
+  /// What the menu bar icon is drawn in; nil keeps the system color.
+  public var alertColor: RGB? {
+    worstRemaining.flatMap { Alert.color(remaining: $0, warning: warningThreshold, critical: criticalThreshold) }
   }
 }
 

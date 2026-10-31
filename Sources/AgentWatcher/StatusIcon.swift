@@ -3,13 +3,15 @@ import AppKit
 
 /// The menu bar glyph: a sparkle inside a ring gauge filled to the tightest
 /// limit across every harness. While there is room it is a template image
-/// and follows the menu bar's own color; once a harness drops to the alert
-/// threshold it is drawn in the alert color, walking from yellow to red.
+/// and follows the menu bar's own color; once a harness drops to the warning
+/// threshold it is drawn orange, reddening on the way to the critical one.
+/// Past the critical threshold the gauge gives way to a red warning sign.
 enum StatusIcon {
   static let size = NSSize(width: 18, height: 18)
 
-  static func image(used: Double?, severity: Double?) -> NSImage {
-    let color: NSColor = severity.map { nsColor(Alert.color(severity: $0)) } ?? .black
+  static func image(used: Double?, alert: RGB?, critical: Bool = false) -> NSImage {
+    if critical, let warning = warningSign() { return warning }
+    let color: NSColor = alert.map(nsColor) ?? .black
     let image = NSImage(size: size, flipped: false) { rect in
       let lineWidth: CGFloat = 1.8
       let center = NSPoint(x: rect.midX, y: rect.midY)
@@ -35,7 +37,22 @@ enum StatusIcon {
       sparkle(center: center, radius: 4.4).fill()
       return true
     }
-    image.isTemplate = severity == nil
+    image.isTemplate = alert == nil
+    return image
+  }
+
+  /// A filled red triangle with a white exclamation mark.
+  static func warningSign() -> NSImage? {
+    let config = NSImage.SymbolConfiguration(pointSize: 15, weight: .bold)
+      .applying(.init(paletteColors: [.white, nsColor(Alert.red)]))
+    guard let symbol = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Usage almost exhausted")?
+      .withSymbolConfiguration(config) else { return nil }
+    let image = NSImage(size: size, flipped: false) { rect in
+      let s = symbol.size
+      symbol.draw(in: NSRect(x: rect.midX - s.width / 2, y: rect.midY - s.height / 2, width: s.width, height: s.height))
+      return true
+    }
+    image.isTemplate = false
     return image
   }
 
