@@ -1,0 +1,24 @@
+.PHONY: build app install run test clean
+
+build:
+	swift build
+
+test:
+	swift test
+
+app:
+	./scripts/build-app.sh
+
+install: app
+	pkill -x AgentWatcher || true
+	rm -rf ~/Applications/AgentWatcher.app
+	mkdir -p ~/Applications
+	cp -R build/AgentWatcher.app ~/Applications/
+	open ~/Applications/AgentWatcher.app
+
+run: app
+	pkill -x AgentWatcher || true
+	open build/AgentWatcher.app
+
+clean:
+	rm -rf .build build

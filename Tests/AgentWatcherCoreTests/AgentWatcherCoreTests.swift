@@ -1,0 +1,95 @@
+@testable import AgentWatcherCore
+import XCTest
+
+final class AlertTests: XCTestCase {
+  func testNoAlertAboveThreshold() {
+    XCTAssertNil(Alert.severity(remaining: 0.16, threshold: 0.15))
+    XCTAssertNil(Alert.severity(remaining: 1, threshold: 0.15))
+  }
+
+  func testSeverityRampsToRed() {
+    XCTAssertEqual(Alert.severity(remaining: 0.15, threshold: 0.15)!, 0, accuracy: 1e-9)
+    XCTAssertEqual(Alert.severity(remaining: 0.075, threshold: 0.15)!, 0.5, accuracy: 1e-9)
+    XCTAssertEqual(Alert.severity(remaining: 0, threshold: 0.15)!, 1, accuracy: 1e-9)
+    XCTAssertEqual(Alert.color(severity: 0), Alert.yellow)
+    XCTAssertEqual(Alert.color(severity: 0.5), Alert.orange)
+    XCTAssertEqual(Alert.color(severity: 1), Alert.red)
+  }
+
+  func testWorstRemainingAcrossProviders() {
+    let future = Date().addingTimeInterval(3600)
+    let a = ProviderUsage(id: "a", name: "A", limits: [UsageLimit(title: "s", used: 0.2, resetsAt: future)])
+    let b = ProviderUsage(id: "b", name: "B", limits: [
+      UsageLimit(title: "s", used: 0.5, resetsAt: future),
+      UsageLimit(title: "w", used: 0.93, resetsAt: future),
+    ])
+    XCTAssertEqual(Alert.worstRemaining([a, b])!, 0.07, accuracy: 1e-9)
+  }
+
+  func testExpiredWindowCountsAsEmpty() {
+    let limit = UsageLimit(title: "s", used: 0.99, resetsAt: Date().addingTimeInterval(-1))
+    XCTAssertEqual(limit.remaining(), 1)
+  }
+
+  func testFailedRefreshKeepsLastGoodLimits() {
+    let old = ProviderUsage(id: "c", name: "C", plan: "Max", limits: [UsageLimit(title: "w", used: 0.4, resetsAt: nil)], fetchedAt: Date())
+    let failed = ProviderUsage(id: "c", name: "C", message: "429")
+    let merged = failed.merged(withPrevious: old)
+    XCTAssertEqual(merged.limits, old.limits)
+    XCTAssertEqual(merged.message, "429")
+    XCTAssertEqual(merged.plan, "Max")
+  }
+}
+
+final class ClaudeParsingTests: XCTestCase {
+  func testParsesWindowsAndScopedLimits() {
+    let payload: [String: Any] = [
+      "five_hour": NSNull(),
+      "seven_day": ["utilization": 93.0, "resets_at": "2026-11-02T07:00:00.349888+00:00"],
+      "limits": [
+        ["kind": "weekly_all", "percent": 93, "scope": NSNull()],
+        ["kind": "weekly_scoped", "percent": 5, "resets_at": "2026-11-02T07:00:00.350072+00:00",
+         "scope": ["model": ["id": NSNull(), "display_name": "Fable"]]],
+      ],
+    ]
+    let limits = ClaudeProvider.parseLimits(payload)
+    XCTAssertEqual(limits.map(\.title), ["Semanal", "Fable · Semanal"])
+    XCTAssertEqual(limits[0].used, 0.93, accuracy: 1e-9)
+    XCTAssertNotNil(limits[0].resetsAt)
+    XCTAssertEqual(limits[1].used, 0.05, accuracy: 1e-9)
+  }
+
+  func testPlanLabel() {
+    XCTAssertEqual(ClaudeProvider.planLabel(tier: "default_claude_max_20x", subscription: "max"), "Max 20x")
+    XCTAssertEqual(ClaudeProvider.planLabel(tier: "default_claude_max_5x", subscription: "team"), "Team 5x")
+    XCTAssertEqual(ClaudeProvider.planLabel(tier: nil, subscription: "pro"), "Pro")
+  }
+}
+
+final class CodexParsingTests: XCTestCase {
+  func testParsesBuckets() {
+    let window: (Double, Int) -> [String: Any] = { ["usedPercent": $0, "windowDurationMins": $1, "resetsAt": 1793479334] }
+    let bucket: [String: Any] = ["limitId": "codex", "primary": window(0, 300), "secondary": window(35, 10080), "planType": "plus"]
+    let result: [String: Any] = ["rateLimits": bucket, "rateLimitsByLimitId": ["codex": bucket]]
+    let parsed = CodexProvider.parse(result)
+    XCTAssertEqual(parsed.plan, "Plus")
+    XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "Semanal"])
+    XCTAssertEqual(parsed.limits[1].used, 0.35, accuracy: 1e-9)
+  }
+
+  func testZeroPercentFromRealJSONIsKept() throws {
+    let json = #"{"rateLimits":{"primary":{"usedPercent":0,"windowDurationMins":300,"resetsAt":1793479334},"secondary":{"usedPercent":35,"windowDurationMins":10080,"resetsAt":1793799273},"planType":"plus","individualLimit":null}}"#
+    let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+    let parsed = CodexProvider.parse(result)
+    XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "Semanal"])
+    XCTAssertEqual(parsed.limits[0].used, 0)
+    XCTAssertNotNil(parsed.limits[0].resetsAt)
+  }
+
+  func testModelBucketIsTitledByName() {
+    let general: [String: Any] = ["primary": ["usedPercent": 10, "windowDurationMins": 300]]
+    let model: [String: Any] = ["limitName": "GPT-5 Pro", "secondary": ["usedPercent": 50, "windowDurationMins": 10080]]
+    let parsed = CodexProvider.parse(["rateLimitsByLimitId": ["codex": general, "gpt5pro": model]])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "GPT-5 Pro · Semanal"])
+  }
+}
