@@ -56,55 +56,68 @@ public struct CodexProvider: UsageProvider {
 
   // MARK: - Parsing
 
+  static let sessionMins = 5 * 60
+  static let weekMins = 7 * 24 * 60
+  static let monthMins = 30 * 24 * 60
+
+  /// T3 Code shows only the main `codex` allowance. Spark / GPT-5 Pro and
+  /// other model buckets must not replace session/weekly or color the icon.
   static func parse(_ result: JSON) -> (limits: [UsageLimit], plan: String?) {
-    // New app-servers return every metered bucket; `rateLimits` is the
-    // backward-compatible single-bucket view. Never count both.
-    var buckets: [(String, JSON)] = []
-    if let byId = result.object("rateLimitsByLimitId") {
-      buckets = byId.compactMap { key, value in (value as? JSON).map { (key, $0) } }
-        .sorted { ($0.0 != "codex" ? 1 : 0, $0.0) < ($1.0 != "codex" ? 1 : 0, $1.0) }
+    let snapshot = result.object("rateLimitsByLimitId")?.object("codex")
+      ?? result.object("rateLimits")
+      ?? [:]
+    let planType = snapshot.string("planType") ?? result.object("rateLimits")?.string("planType")
+    // Spark and other model buckets sometimes land in `rateLimits` with their
+    // own limitId; T3 drops those so they cannot replace the main allowance.
+    if let limitId = snapshot.string("limitId"), limitId != "codex" {
+      return ([], planType.map(planLabel))
     }
-    if buckets.isEmpty, let legacy = result.object("rateLimits") {
-      buckets = [("codex", legacy)]
-    }
+    let monthlyPlan = ["free", "go"].contains(planType?.lowercased())
 
     var limits: [UsageLimit] = []
-    for (limitId, bucket) in buckets {
-      let general = limitId == "codex" || (buckets.count == 1 && bucket.string("limitName") == nil)
-      let bucketName = bucket.string("limitName") ?? limitId
-      for key in ["primary", "secondary"] {
-        guard let window = bucket.object(key), let used = window.number("usedPercent") else { continue }
-        let minutes = Int(window.number("windowDurationMins") ?? 0)
-        let span = windowTitle(minutes)
-        var title = general ? span : "\(bucketName) · \(span)"
-        // Titles are the rows' identity in the panel; keep them unique.
-        if limits.contains(where: { $0.title == title }) { title += " (\(key))" }
-        limits.append(UsageLimit(title: title, used: used / 100, resetsAt: Dates.parse(window["resetsAt"])))
-      }
+    let positions: [(key: String, fallbackMins: Int)] = [
+      ("primary", monthlyPlan ? monthMins : sessionMins),
+      ("secondary", weekMins),
+    ]
+    for (key, fallbackMins) in positions {
+      guard let window = snapshot.object(key), let used = window.number("usedPercent") else { continue }
+      let reported = Int(window.number("windowDurationMins") ?? 0)
+      let minutes = reported > 0 ? reported : fallbackMins
+      var title = windowTitle(minutes)
+      if limits.contains(where: { $0.title == title }) { title += " (\(key))" }
+      limits.append(UsageLimit(title: title, used: used / 100, resetsAt: Dates.parse(window["resetsAt"])))
     }
-
-    let rawPlan = buckets.lazy.compactMap { $0.1.string("planType") }.first
-      ?? result.object("rateLimits")?.string("planType")
-    return (limits, rawPlan.map(planLabel))
+    if let individual = snapshot.object("individualLimit"),
+       let remaining = individual.number("remainingPercent") {
+      limits.append(UsageLimit(
+        title: "Monthly credit",
+        used: (100 - remaining) / 100,
+        resetsAt: Dates.parse(individual["resetsAt"])
+      ))
+    }
+    return (limits, planType.map(planLabel))
   }
 
   static func windowTitle(_ minutes: Int) -> String {
-    if minutes >= 28 * 24 * 60 { return "Monthly" }
-    if minutes == 7 * 24 * 60 { return "Weekly" }
-    if minutes >= 24 * 60 { return "\(minutes / (24 * 60))d" }
+    if minutes >= monthMins { return "Monthly" }
+    if minutes >= weekMins { return "Weekly" }
+    if minutes >= 24 * 60 { return "Session (\(minutes / (24 * 60))d)" }
     if minutes > 0 { return minutes % 60 == 0 ? "Session (\(minutes / 60)h)" : "Session (\(minutes)m)" }
-    return "Limit"
+    return "Session"
   }
 
   static func planLabel(_ raw: String) -> String {
     switch raw.lowercased() {
     case "plus": return "Plus"
     case "pro": return "Pro"
+    case "prolite": return "Pro 5x"
+    case "promax": return "Pro Max"
     case "team": return "Team"
-    case "business": return "Business"
-    case "enterprise": return "Enterprise"
+    case "business", "self_serve_business_prolite", "self_serve_business_usage_based": return "Business"
+    case "enterprise", "ent26", "enterprise_cbp_automation", "enterprise_cbp_usage_based": return "Enterprise"
     case "edu": return "Edu"
     case "free": return "Free"
+    case "go": return "Go"
     default: return raw.prefix(1).uppercased() + raw.dropFirst()
     }
   }

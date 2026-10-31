@@ -22,8 +22,10 @@ public enum Alert {
   /// The settings' slider step, and the closest the two thresholds may get.
   public static let step = 0.01
 
-  public static let orange = RGB(1.00, 0.55, 0.15)
-  public static let red = RGB(0.96, 0.20, 0.24)
+  /// Warning starts here (#FFA915) and mixes toward `red` as remaining falls.
+  public static let orange = RGB(1, 169.0 / 255.0, 21.0 / 255.0)
+  /// Critical (#FD464D).
+  public static let red = RGB(253.0 / 255.0, 70.0 / 255.0, 77.0 / 255.0)
 
   public static func level(
     remaining: Double, warning: Double = defaultWarning, critical: Double = defaultCritical
@@ -64,7 +66,7 @@ public enum Alert {
     return orange.mix(red, min(max(t, 0), 1))
   }
 
-  /// The tightest window across every harness decides the icon.
+  /// The tightest account-level window across every harness decides the icon.
   public static func worstRemaining(_ usages: [ProviderUsage], now: Date = Date()) -> Double? {
     usages.compactMap { $0.tightest(now: now)?.remaining(now: now) }.min()
   }
