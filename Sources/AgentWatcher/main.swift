@@ -54,8 +54,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func tooltip() -> String {
     guard !store.usages.isEmpty else { return "Agent Watcher" }
     return store.usages.map { usage in
-      guard let tight = usage.tightest() else { return "\(usage.name): sem dados" }
-      return "\(usage.name): \(Int((tight.remaining() * 100).rounded()))% restante (\(tight.title))"
+      guard let tight = usage.tightest() else { return "\(usage.name): no data" }
+      return "\(usage.name): \(Int((tight.remaining() * 100).rounded()))% left (\(tight.title))"
     }.joined(separator: "\n")
   }
 
@@ -80,10 +80,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func showMenu() {
     let menu = NSMenu()
-    menu.addItem(withTitle: "Atualizar", action: #selector(refreshNow), keyEquivalent: "r").target = self
-    menu.addItem(withTitle: "Configurações…", action: #selector(openSettings), keyEquivalent: ",").target = self
+    menu.addItem(withTitle: "Refresh", action: #selector(refreshNow), keyEquivalent: "r").target = self
+    menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
     menu.addItem(.separator())
-    menu.addItem(withTitle: "Sair", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+    menu.addItem(withTitle: "Quit", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     statusItem.menu = menu
     statusItem.button?.performClick(nil)
     statusItem.menu = nil
@@ -105,7 +105,7 @@ if CommandLine.arguments.contains("--dump") {
       let usage = await provider.fetch()
       print("\(usage.name) [\(usage.plan ?? "-")]\(usage.message.map { " ! \($0)" } ?? "")")
       for limit in usage.limits {
-        print("  \(limit.title): \(Int((limit.used * 100).rounded()))% usado, renova \(limit.resetsAt.map { "\($0)" } ?? "-")")
+        print("  \(limit.title): \(Int(((1 - limit.used) * 100).rounded()))% left, resets \(limit.resetsAt.map { "\($0)" } ?? "-")")
       }
     }
     done.signal()

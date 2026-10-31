@@ -8,21 +8,21 @@ import math, sys
 
 PALETTES = {
   # name: (gradient stops for sparkle and ring, background center, background edge)
-  "oceano": (("#22d3ee", "#3b82f6", "#6366f1"), "#13254a", "#03060e"),
+  "ocean": (("#22d3ee", "#3b82f6", "#6366f1"), "#13254a", "#03060e"),
   "aurora": (("#bef264", "#2dd4bf", "#06b6d4"), "#0f2e2e", "#020909"),
-  "lilas":  (("#f5d0fe", "#c084fc", "#6366f1"), "#2a1846", "#07040e"),
-  "ambar":  (("#fde68a", "#fb923c", "#e11d48"), "#33190c", "#0a0503"),
-  "gelo":   (("#ffffff", "#bae6fd", "#60a5fa"), "#1e2a44", "#020617"),
+  "lilac":  (("#f5d0fe", "#c084fc", "#6366f1"), "#2a1846", "#07040e"),
+  "amber":  (("#fde68a", "#fb923c", "#e11d48"), "#33190c", "#0a0503"),
+  "ice":   (("#ffffff", "#bae6fd", "#60a5fa"), "#1e2a44", "#020617"),
 }
 
 # name: (background center, background edge, ring track color, track opacity)
 # None for the colors means "derive from the palette".
 BACKGROUNDS = {
-  "escuro":  (None, None, "#fff", .08),          # dark, tinted by the palette
-  "preto":   ("#1c1c1e", "#000000", "#fff", .08),
-  "grafite": ("#4a4d55", "#24262c", "#fff", .10),
-  "claro":   ("#ffffff", "#e4e6eb", "#000", .07),
-  "cor":     ("c1", "c2", "#fff", .18),          # palette gradient, white glyph
+  "dark":  (None, None, "#fff", .08),          # dark, tinted by the palette
+  "black":   ("#1c1c1e", "#000000", "#fff", .08),
+  "graphite": ("#4a4d55", "#24262c", "#fff", .10),
+  "light":   ("#ffffff", "#e4e6eb", "#000", .07),
+  "color":     ("c1", "c2", "#fff", .18),          # palette gradient, white glyph
 }
 
 def pt(cx, cy, r, a):
@@ -40,15 +40,15 @@ def sparkle(cx, cy, s, fill):
           f'C{cx+k} {cy+k*0.6} {cx+k*0.6} {cy+k} {cx} {cy+s} C{cx-k*0.6} {cy+k} {cx-k} {cy+k*0.6} {cx-s} {cy} '
           f'C{cx-k} {cy-k*0.6} {cx-k*0.6} {cy-k} {cx} {cy-s}Z"/>')
 
-def svg(palette, background="escuro"):
+def svg(palette, background="dark"):
   (c0, c1, c2), tint0, tint1 = PALETTES[palette]
   bg0, bg1, track, track_op = BACKGROUNDS[background]
   colors = {"c0": c0, "c1": c1, "c2": c2}
   bg0 = tint0 if bg0 is None else colors.get(bg0, bg0)
   bg1 = tint1 if bg1 is None else colors.get(bg1, bg1)
-  if background == "cor":
+  if background == "color":
     c0 = c1 = c2 = "#ffffff"
-  shine = .10 if background == "claro" else .16
+  shine = .10 if background == "light" else .16
   return f'''<svg viewBox="0 0 1024 1024" width="1024" height="1024" xmlns="http://www.w3.org/2000/svg">
 <defs>
 <radialGradient id="bg" cx=".5" cy=".3" r=".85"><stop offset="0" stop-color="{bg0}"/><stop offset="1" stop-color="{bg1}"/></radialGradient>
@@ -69,4 +69,4 @@ if __name__ == "__main__":
   if sys.argv[1:] == ["--list"]:
     print("palettes:", " ".join(PALETTES)); print("backgrounds:", " ".join(BACKGROUNDS)); sys.exit()
   palette, out = sys.argv[1], sys.argv[2]
-  open(out, "w").write(svg(palette, sys.argv[3] if len(sys.argv) > 3 else "escuro"))
+  open(out, "w").write(svg(palette, sys.argv[3] if len(sys.argv) > 3 else "dark"))

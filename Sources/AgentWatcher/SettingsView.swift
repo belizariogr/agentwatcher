@@ -8,8 +8,8 @@ struct SettingsView: View {
 
   var body: some View {
     Form {
-      Section("Atualização") {
-        Picker("Atualizar a cada", selection: $store.refreshInterval) {
+      Section("Refresh") {
+        Picker("Refresh every", selection: $store.refreshInterval) {
           ForEach(UsageStore.refreshIntervalChoices, id: \.self) { seconds in
             Text(Self.intervalLabel(seconds)).tag(seconds)
           }
@@ -20,16 +20,16 @@ struct SettingsView: View {
       Section {
         HStack {
           Slider(value: $store.alertThreshold, in: 0.05...0.5, step: 0.05) {
-            Text("Alertar com")
+            Text("Alert at")
           }
-          Text("\(Int((store.alertThreshold * 100).rounded()))% restante")
+          Text("\(Int((store.alertThreshold * 100).rounded()))% left")
             .monospacedDigit()
             .frame(width: 100, alignment: .trailing)
         }
       } header: {
-        Text("Alerta")
+        Text("Alert")
       } footer: {
-        Text("Abaixo desse valor, o ícone da barra vai do amarelo ao vermelho.")
+        Text("Below this, the menu bar icon goes from yellow to red.")
           .foregroundStyle(.secondary)
       }
 
@@ -45,7 +45,7 @@ struct SettingsView: View {
               VStack(alignment: .leading, spacing: 1) {
                 Text(provider.name)
                 if !installed {
-                  Text("Não instalado").font(.caption).foregroundStyle(.secondary)
+                  Text("Not installed").font(.caption).foregroundStyle(.secondary)
                 }
               }
             }
@@ -56,12 +56,13 @@ struct SettingsView: View {
     .formStyle(.grouped)
     .frame(width: 420)
     .fixedSize(horizontal: false, vertical: true)
+    .environment(\.locale, Locale(identifier: "en_US"))
   }
 
   static func intervalLabel(_ seconds: TimeInterval) -> String {
     let minutes = Int(seconds / 60)
-    if minutes >= 60 { return minutes == 60 ? "1 hora" : "\(minutes / 60) horas" }
-    return minutes == 1 ? "1 minuto" : "\(minutes) minutos"
+    if minutes >= 60 { return minutes == 60 ? "1 hour" : "\(minutes / 60) hours" }
+    return minutes == 1 ? "1 minute" : "\(minutes) minutes"
   }
 }
 
@@ -70,7 +71,7 @@ struct LaunchAtLoginToggle: View {
   @State private var enabled = SMAppService.mainApp.status == .enabled
 
   var body: some View {
-    Toggle("Abrir ao iniciar sessão", isOn: $enabled)
+    Toggle("Launch at login", isOn: $enabled)
       .onChange(of: enabled) { _, wanted in
         do {
           if wanted { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
@@ -91,7 +92,7 @@ final class SettingsWindowController {
   func show() {
     if window == nil {
       let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
-      window.title = "Configurações do Agent Watcher"
+      window.title = "Agent Watcher Settings"
       window.styleMask = [.titled, .closable]
       window.isReleasedWhenClosed = false
       window.center()

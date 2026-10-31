@@ -19,6 +19,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleIdentifier</key><string>com.belizariogr.agentwatcher</string>
   <key>CFBundleName</key><string>AgentWatcher</string>
   <key>CFBundleDisplayName</key><string>Agent Watcher</string>

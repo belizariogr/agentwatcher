@@ -22,11 +22,11 @@ public struct CodexProvider: UsageProvider {
   public func fetch() async -> ProviderUsage {
     var usage = ProviderUsage(id: id, name: name)
     guard let binary = Shell.which("codex") else {
-      usage.message = "CLI `codex` não encontrado."
+      usage.message = "`codex` CLI not found."
       return usage
     }
     guard FileManager.default.fileExists(atPath: codexHome.appendingPathComponent("auth.json").path) else {
-      usage.message = "Sem login. Rode `codex login` para ver os limites."
+      usage.message = "Not logged in. Run `codex login` to see limits."
       return usage
     }
 
@@ -34,14 +34,14 @@ public struct CodexProvider: UsageProvider {
     do {
       response = try await Self.readRateLimits(binary: binary)
     } catch {
-      usage.message = "O app-server do Codex não respondeu."
+      usage.message = "Codex app-server did not answer."
       return usage
     }
     if let error = response.object("error") {
       let text = error.string("message") ?? ""
       usage.message = text.localizedCaseInsensitiveContains("chatgpt") || text.localizedCaseInsensitiveContains("auth")
-        ? "Limites só existem com login ChatGPT (`codex login`)."
-        : "Codex: \(text.isEmpty ? "erro ao ler limites" : text)"
+        ? "Limits only exist with a ChatGPT login (`codex login`)."
+        : "Codex: \(text.isEmpty ? "could not read limits" : text)"
       return usage
     }
     let result = response.object("result") ?? [:]
@@ -49,7 +49,7 @@ public struct CodexProvider: UsageProvider {
     usage.limits = parsed.limits
     usage.plan = parsed.plan
     usage.fetchedAt = Date()
-    if usage.limits.isEmpty { usage.message = "O Codex não retornou limites." }
+    if usage.limits.isEmpty { usage.message = "Codex returned no limits." }
     return usage
   }
 
@@ -86,10 +86,10 @@ public struct CodexProvider: UsageProvider {
   }
 
   static func windowTitle(_ minutes: Int) -> String {
-    if minutes >= 28 * 24 * 60 { return "Mensal" }
-    if minutes == 7 * 24 * 60 { return "Semanal" }
+    if minutes >= 28 * 24 * 60 { return "Monthly" }
+    if minutes == 7 * 24 * 60 { return "Weekly" }
     if minutes >= 24 * 60 { return "\(minutes / (24 * 60))d" }
-    if minutes > 0 { return minutes % 60 == 0 ? "Sessão (\(minutes / 60)h)" : "Sessão (\(minutes)m)" }
+    if minutes > 0 { return minutes % 60 == 0 ? "Session (\(minutes / 60)h)" : "Session (\(minutes)m)" }
     return "Limite"
   }
 

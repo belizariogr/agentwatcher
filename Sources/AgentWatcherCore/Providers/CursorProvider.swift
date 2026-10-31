@@ -71,7 +71,7 @@ public struct CursorProvider: UsageProvider {
   public func fetch() async -> ProviderUsage {
     var usage = ProviderUsage(id: id, name: name)
     guard let token = accessToken() else {
-      usage.message = "Sem login. Rode `cursor-agent login` (ou entre no Cursor) para ver os limites."
+      usage.message = "Not logged in. Run `cursor-agent login` (or sign in to Cursor) to see limits."
       return usage
     }
 
@@ -80,20 +80,20 @@ public struct CursorProvider: UsageProvider {
       let payload = try await call("GetCurrentPeriodUsage", token: token)
       usage.limits = Self.parseLimits(payload)
       usage.fetchedAt = Date()
-      if usage.limits.isEmpty { usage.message = "O Cursor não retornou limites." }
+      if usage.limits.isEmpty { usage.message = "Cursor returned no limits." }
     } catch CallError.status(let status) where status == 401 || status == 403 {
       let expired = Self.expiry(of: token).map { $0 < Date() } ?? false
       usage.message = expired
-        ? "Login do Cursor expirado. Rode `cursor-agent login`."
-        : "O Cursor recusou o login. Rode `cursor-agent login`."
+        ? "Cursor login expired. Run `cursor-agent login`."
+        : "Cursor rejected the login. Run `cursor-agent login`."
     } catch CallError.status(429) {
-      usage.message = "Cursor limitando consultas; tentando de novo mais tarde."
+      usage.message = "Cursor is rate limiting; will retry later."
     } catch CallError.status(let status) {
-      usage.message = "Cursor respondeu HTTP \(status)."
+      usage.message = "Cursor answered HTTP \(status)."
     } catch CallError.invalid {
-      usage.message = "Resposta inválida do Cursor."
+      usage.message = "Invalid response from Cursor."
     } catch {
-      usage.message = "Não foi possível falar com o Cursor."
+      usage.message = "Could not reach Cursor."
     }
     usage.plan = await planInfo?.object("planInfo")?.string("planName")
     return usage
@@ -114,7 +114,7 @@ public struct CursorProvider: UsageProvider {
     add("apiPercentUsed", "Other Models")
     // Older plans only report spend against the included amount.
     if limits.isEmpty, let spent = plan.number("includedSpend"), let limit = plan.number("limit"), limit > 0 {
-      limits.append(UsageLimit(title: "Mensal", used: spent / limit, resetsAt: resets))
+      limits.append(UsageLimit(title: "Monthly", used: spent / limit, resetsAt: resets))
     }
     return limits
   }

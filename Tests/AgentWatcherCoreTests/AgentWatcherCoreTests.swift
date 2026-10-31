@@ -53,7 +53,7 @@ final class ClaudeParsingTests: XCTestCase {
       ],
     ]
     let limits = ClaudeProvider.parseLimits(payload)
-    XCTAssertEqual(limits.map(\.title), ["Semanal", "Fable · Semanal"])
+    XCTAssertEqual(limits.map(\.title), ["Weekly", "Fable · Weekly"])
     XCTAssertEqual(limits[0].used, 0.93, accuracy: 1e-9)
     XCTAssertNotNil(limits[0].resetsAt)
     XCTAssertEqual(limits[1].used, 0.05, accuracy: 1e-9)
@@ -73,7 +73,7 @@ final class CodexParsingTests: XCTestCase {
     let result: [String: Any] = ["rateLimits": bucket, "rateLimitsByLimitId": ["codex": bucket]]
     let parsed = CodexProvider.parse(result)
     XCTAssertEqual(parsed.plan, "Plus")
-    XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "Semanal"])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Session (5h)", "Weekly"])
     XCTAssertEqual(parsed.limits[1].used, 0.35, accuracy: 1e-9)
   }
 
@@ -81,7 +81,7 @@ final class CodexParsingTests: XCTestCase {
     let json = #"{"rateLimits":{"primary":{"usedPercent":0,"windowDurationMins":300,"resetsAt":1793479334},"secondary":{"usedPercent":35,"windowDurationMins":10080,"resetsAt":1793799273},"planType":"plus","individualLimit":null}}"#
     let result = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
     let parsed = CodexProvider.parse(result)
-    XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "Semanal"])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Session (5h)", "Weekly"])
     XCTAssertEqual(parsed.limits[0].used, 0)
     XCTAssertNotNil(parsed.limits[0].resetsAt)
   }
@@ -90,7 +90,7 @@ final class CodexParsingTests: XCTestCase {
     let general: [String: Any] = ["primary": ["usedPercent": 10, "windowDurationMins": 300]]
     let model: [String: Any] = ["limitName": "GPT-5 Pro", "secondary": ["usedPercent": 50, "windowDurationMins": 10080]]
     let parsed = CodexProvider.parse(["rateLimitsByLimitId": ["codex": general, "gpt5pro": model]])
-    XCTAssertEqual(parsed.limits.map(\.title), ["Sessão (5h)", "GPT-5 Pro · Semanal"])
+    XCTAssertEqual(parsed.limits.map(\.title), ["Session (5h)", "GPT-5 Pro · Weekly"])
   }
 }
 
@@ -106,7 +106,7 @@ final class CursorParsingTests: XCTestCase {
 
   func testFallsBackToIncludedSpend() {
     let limits = CursorProvider.parseLimits(["planUsage": ["includedSpend": 1500, "limit": 2000] as JSON])
-    XCTAssertEqual(limits.map(\.title), ["Mensal"])
+    XCTAssertEqual(limits.map(\.title), ["Monthly"])
     XCTAssertEqual(limits[0].used, 0.75, accuracy: 1e-9)
   }
 

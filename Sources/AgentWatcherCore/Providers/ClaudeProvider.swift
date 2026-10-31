@@ -72,7 +72,7 @@ public struct ClaudeProvider: UsageProvider {
   public func fetch() async -> ProviderUsage {
     var usage = ProviderUsage(id: id, name: name)
     guard let login = login() else {
-      usage.message = "Sem login. Rode `claude` e faça login para ver os limites."
+      usage.message = "Not logged in. Run `claude` and log in to see limits."
       return usage
     }
     usage.plan = login.plan
@@ -88,24 +88,24 @@ public struct ClaudeProvider: UsageProvider {
       switch status {
       case 200:
         guard let payload = (try? JSONSerialization.jsonObject(with: data)) as? JSON else {
-          usage.message = "Resposta inválida do endpoint de uso da Anthropic."
+          usage.message = "Invalid response from Anthropic's usage endpoint."
           return usage
         }
         usage.limits = Self.parseLimits(payload)
         usage.fetchedAt = Date()
-        if usage.limits.isEmpty { usage.message = "A Anthropic não retornou limites." }
+        if usage.limits.isEmpty { usage.message = "Anthropic returned no limits." }
       case 401, 403:
         let expired = login.expiresAt.map { $0 < Date() } ?? false
         usage.message = expired
-          ? "Token expirado. Abra o Claude Code para renovar o login."
-          : "A Anthropic recusou o login. Rode `claude auth login`."
+          ? "Token expired. Open Claude Code to renew the login."
+          : "Anthropic rejected the login. Run `claude auth login`."
       case 429:
-        usage.message = "Endpoint de uso limitando consultas; tentando de novo mais tarde."
+        usage.message = "Usage endpoint is rate limiting; will retry later."
       default:
-        usage.message = "Endpoint de uso respondeu HTTP \(status)."
+        usage.message = "Usage endpoint answered HTTP \(status)."
       }
     } catch {
-      usage.message = "Não foi possível falar com a Anthropic."
+      usage.message = "Could not reach Anthropic."
     }
     return usage
   }
@@ -116,8 +116,8 @@ public struct ClaudeProvider: UsageProvider {
       guard let bucket = payload.object(key), let pct = bucket.number("utilization"), pct >= 0 else { return }
       limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(bucket["resets_at"])))
     }
-    add("five_hour", "Sessão (5h)")
-    add("seven_day", "Semanal")
+    add("five_hour", "Session (5h)")
+    add("seven_day", "Weekly")
 
     // Model-scoped windows ("Fable Semanal") live in the `limits` list.
     var seen = Set<String>()
@@ -126,8 +126,8 @@ public struct ClaudeProvider: UsageProvider {
             let modelName = model.string("display_name") ?? model.string("id"),
             let pct = entry.number("percent"), pct >= 0 else { continue }
       let kind = entry.string("kind") ?? ""
-      let window = kind.hasPrefix("weekly") || kind.hasPrefix("seven_day") ? "Semanal"
-        : kind.hasPrefix("five_hour") || kind.hasPrefix("session") ? "Sessão" : ""
+      let window = kind.hasPrefix("weekly") || kind.hasPrefix("seven_day") ? "Weekly"
+        : kind.hasPrefix("five_hour") || kind.hasPrefix("session") ? "Session" : ""
       let title = window.isEmpty ? modelName : "\(modelName) · \(window)"
       guard seen.insert(title).inserted else { continue }
       limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(entry["resets_at"])))

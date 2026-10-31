@@ -11,7 +11,7 @@ struct PanelView: View {
       header
 
       if store.usages.isEmpty {
-        Text(store.isRefreshing ? "Carregando…" : "Nenhum harness para mostrar.\nClaude Code, Codex e Cursor aparecem aqui quando instalados e ativos nas configurações.")
+        Text(store.isRefreshing ? "Loading…" : "No harness to show.\nClaude Code, Codex and Cursor show up here when installed and enabled in Settings.")
           .font(.callout)
           .foregroundStyle(.secondary)
           .frame(maxWidth: .infinity, alignment: .center)
@@ -28,6 +28,7 @@ struct PanelView: View {
     }
     .padding(14)
     .frame(width: 340)
+    .environment(\.locale, Locale(identifier: "en_US"))
   }
 
   private var header: some View {
@@ -53,7 +54,7 @@ struct PanelView: View {
             Image(systemName: "arrow.clockwise")
           }
           .buttonStyle(.borderless)
-          .help("Atualizar agora")
+          .help("Refresh now")
         }
       }
       .frame(width: 18, height: 18)
@@ -65,12 +66,12 @@ struct PanelView: View {
       Button {
         onOpenSettings()
       } label: {
-        Label("Configurações", systemImage: "gearshape")
+        Label("Settings", systemImage: "gearshape")
       }
       .buttonStyle(.borderless)
       .keyboardShortcut(",")
       Spacer()
-      Button("Sair", action: onQuit)
+      Button("Quit", action: onQuit)
         .buttonStyle(.borderless)
         .keyboardShortcut("q")
     }
@@ -146,16 +147,16 @@ struct LimitRow: View {
         HStack {
           Text(limit.title).font(.callout)
           Spacer()
-          Text("\(Int((used * 100).rounded()))% usado")
+          Text("\(Int(((1 - used) * 100).rounded()))% left")
             .font(.callout.monospacedDigit().weight(severity == nil ? .regular : .semibold))
             .foregroundStyle(severity == nil ? Color.primary : tint)
         }
         Meter(value: used, tint: tint)
         HStack {
-          Text("Restam \(Int(((1 - used) * 100).rounded()))%")
+          Text("\(Int((used * 100).rounded()))% used")
           Spacer()
           if let resetsAt = limit.resetsAt, resetsAt > context.date {
-            Text("Renova em \(Self.duration(resetsAt.timeIntervalSince(context.date)))")
+            Text("Resets in \(Self.duration(resetsAt.timeIntervalSince(context.date)))")
           }
         }
         .font(.caption)
@@ -168,8 +169,8 @@ struct LimitRow: View {
     let minutes = Int(seconds / 60)
     let days = minutes / 1440, hours = (minutes % 1440) / 60, mins = minutes % 60
     if days > 0 { return "\(days)d \(hours)h" }
-    if hours > 0 { return "\(hours)h \(mins)min" }
-    return "\(max(mins, 1))min"
+    if hours > 0 { return "\(hours)h \(mins)m" }
+    return "\(max(mins, 1))m"
   }
 }
 

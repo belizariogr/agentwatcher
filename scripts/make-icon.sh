@@ -3,8 +3,8 @@
 # Needs rsvg-convert (brew install librsvg).
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PALETTE="${1:-oceano}"
-BACKGROUND="${2:-preto}"
+PALETTE="${1:-ocean}"
+BACKGROUND="${2:-black}"
 
 mkdir -p Resources design
 python3 -I scripts/app_icon.py "$PALETTE" design/AppIcon.svg "$BACKGROUND"
