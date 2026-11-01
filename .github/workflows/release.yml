@@ -11,13 +11,19 @@ name: Release
 #   with resume_run = the ID of the run to take the artifacts from and
 #   start_at = the first stage to redo. Both runs must be on the same commit.
 #
-# Push a tag like v0.2.0 to run everything and publish a GitHub Release. Run by
-# hand on a branch to get the DMG as an artifact without publishing.
+# Push a tag like v0.2.0 to run everything and publish a GitHub Release.
+# Run by hand on a branch with version left empty to bump the patch
+# (v0.2.1 → v0.2.2), tag this commit, and publish. Set version to release
+# that number instead. notarize=false only uploads the DMG as an artifact.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
+      version:
+        description: Release version (1.2.3). Empty bumps the patch from the latest tag and publishes.
+        type: string
+        default: ''
       start_at:
         description: First stage to run (earlier ones come from resume_run)
         type: choice
@@ -58,6 +64,11 @@ jobs:
       from-sign-dmg: ${{ steps.plan.outputs.from-sign-dmg }}
       from-notarize: ${{ steps.plan.outputs.from-notarize }}
       from-publish: ${{ steps.plan.outputs.from-publish }}
+      release_tag: ${{ steps.plan.outputs.release_tag }}
+      version: ${{ steps.plan.outputs.version }}
+    permissions:
+      contents: write # create the release tag; the workflow token does not start a second run
+      actions: read
     steps:
       - id: plan
         env:
@@ -66,12 +77,18 @@ jobs:
           RESUME_RUN: ${{ inputs.resume_run }}
           NOTARIZE: ${{ github.event_name != 'workflow_dispatch' || inputs.notarize }}
           IS_TAG: ${{ startsWith(github.ref, 'refs/tags/') }}
+          VERSION_INPUT: ${{ inputs.version }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
           if [[ "$IS_TAG" == true ]]; then
             [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "tag must look like v1.2.3"
           fi
+
+          ver="${VERSION_INPUT:-}"
+          ver="${ver#v}"
+          [[ -z "$ver" || "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "version must look like 1.2.3"
+          [[ "$NOTARIZE" == true || -z "$ver" ]] || fail "version is only used when publishing; notarize is off"
 
           stages=(build sign-app dmg sign-dmg notarize publish)
           start=-1
@@ -85,17 +102,80 @@ jobs:
             [[ "$sha" == "$GITHUB_SHA" ]] || fail "run $RESUME_RUN built $sha, this run is on $GITHUB_SHA"
           fi
 
+          # Tag this commit gets published as. Blank version on a fresh run
+          # bumps the patch. The tag is created with the workflow token, which
+          # does not start the tag-push run, so this run is the one that publishes.
+          commit_of() { gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .sha 2>/dev/null || true; }
+          TAG=""
+          if [[ "$IS_TAG" == true ]]; then
+            TAG="$GITHUB_REF_NAME"
+            [[ -z "$ver" || "v$ver" == "$TAG" ]] || fail "this run is already $TAG"
+          elif [[ "$NOTARIZE" == true && "$start" == 0 ]]; then
+            refs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/v" --jq '.[].ref')" \
+              || fail "could not list tags"
+            latest="$(printf '%s\n' "$refs" | sed 's#refs/tags/##' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 || true)"
+            if [[ -n "$ver" ]]; then
+              TAG="v$ver"
+              if [[ -n "$latest" ]]; then
+                have="$(commit_of "$TAG")"
+                top="$(printf '%s\n%s\n' "$latest" "$TAG" | sort -V | tail -1)"
+                if [[ -n "$have" && "$have" == "$GITHUB_SHA" ]]; then
+                  :
+                elif [[ "$top" != "$TAG" || "$TAG" == "$latest" ]]; then
+                  fail "version $TAG is not newer than $latest"
+                fi
+              fi
+            elif [[ -n "$latest" ]] && [[ "$(commit_of "$latest")" == "$GITHUB_SHA" ]]; then
+              TAG="$latest"
+              echo "This commit is already $TAG"
+            elif [[ -n "$latest" ]]; then
+              IFS=. read -r major minor patch <<<"${latest#v}"
+              TAG="v${major}.${minor}.$((patch + 1))"
+              echo "Next version: $TAG (was $latest)"
+            else
+              TAG="v0.1.0"
+              echo "Next version: $TAG"
+            fi
+            have="$(commit_of "$TAG")"
+            if [[ -z "$have" ]]; then
+              # Annotated, like the tags pushed by hand. The workflow token does not
+              # start the tag-push workflow, so this run publishes.
+              tag_object="$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+                -f tag="$TAG" \
+                -f message="Agent Watcher ${TAG#v}" \
+                -f object="$GITHUB_SHA" \
+                -f type="commit" \
+                -f 'tagger[name]=github-actions[bot]' \
+                -f 'tagger[email]=41898282+github-actions[bot]@users.noreply.github.com' \
+                -f "tagger[date]=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+                --jq .sha)"
+              gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$tag_object" >/dev/null
+              echo "Tagged $TAG"
+            elif [[ "$have" == "$GITHUB_SHA" ]]; then
+              echo "$TAG already points at this commit"
+            else
+              fail "$TAG points at $have, not this commit ($GITHUB_SHA)"
+            fi
+          elif [[ "$NOTARIZE" == true && -n "$ver" ]]; then
+            TAG="v$ver"
+            [[ "$(commit_of "$TAG")" == "$GITHUB_SHA" ]] || fail "$TAG does not point at this commit; start at build to release it"
+          elif [[ "$NOTARIZE" == true ]]; then
+            echo "Resuming on a branch without a version does not publish. Start at build to tag the next patch, or run the workflow on the release tag."
+          fi
+
           for i in "${!stages[@]}"; do
             stage="${stages[$i]}"
             run=$(( i >= start ))
             [[ "$stage" == notarize && "$NOTARIZE" != true ]] && run=0
-            [[ "$stage" == publish && ( "$NOTARIZE" != true || "$IS_TAG" != true ) ]] && run=0
+            [[ "$stage" == publish && ( "$NOTARIZE" != true || -z "$TAG" ) ]] && run=0
             echo "$stage=$([[ $run == 1 ]] && echo true || echo false)" >>"$GITHUB_OUTPUT"
             # Input of this stage: this run if the previous stage runs here.
             if (( i > 0 )); then
               echo "from-$stage=$( (( i - 1 >= start )) && echo "$GITHUB_RUN_ID" || echo "$RESUME_RUN")" >>"$GITHUB_OUTPUT"
             fi
           done
+          echo "release_tag=$TAG" >>"$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >>"$GITHUB_OUTPUT"
           cat "$GITHUB_OUTPUT"
 
   build:
@@ -118,6 +198,8 @@ jobs:
       - name: Test
         run: swift test
       - name: Build the universal app
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
         run: ./scripts/release.sh build
       # Zipped with ditto: artifacts would drop the executable bit and symlinks.
       - run: ditto -c -k --keepParent build/AgentWatcher.app build/app.zip
@@ -292,12 +374,14 @@ jobs:
       - name: Create or update the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.release_tag }}
         run: |
           set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::no release tag"; exit 1; }
           shasum -a 256 AgentWatcher-*.dmg | tee SHA256SUMS.txt
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" AgentWatcher-*.dmg SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" AgentWatcher-*.dmg SHA256SUMS.txt --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$GITHUB_REF_NAME" AgentWatcher-*.dmg SHA256SUMS.txt \
-              --repo "$GITHUB_REPOSITORY" --title "Agent Watcher ${GITHUB_REF_NAME#v}" --generate-notes
+            gh release create "$TAG" AgentWatcher-*.dmg SHA256SUMS.txt \
+              --repo "$GITHUB_REPOSITORY" --title "Agent Watcher ${TAG#v}" --generate-notes
           fi

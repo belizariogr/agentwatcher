@@ -45,7 +45,11 @@ make icon PALETTE=aurora BG=light && make run
 ## Releases
 
 Pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, one job per stage,
-each handing its output to the next as an artifact:
+each handing its output to the next as an artifact. Running the workflow by
+hand on a branch does the same when **version** is left empty: it bumps the
+patch from the latest tag (`v0.2.1` → `v0.2.2`), tags that commit, and
+publishes. Set **version** to `0.3.0` to release that number instead.
+`-f notarize=false` only produces the DMG artifact and does not tag or publish.
 
 | Stage | Does | Artifact |
 |---|---|---|
@@ -58,6 +62,8 @@ each handing its output to the next as an artifact:
 
 ```bash
 git tag v0.1.0 && git push origin v0.1.0
+gh workflow run release.yml --ref main                  # next patch, then publish
+gh workflow run release.yml --ref main -f version=0.3.0
 ```
 
 **Resuming after a failure:**
@@ -72,8 +78,9 @@ git tag v0.1.0 && git push origin v0.1.0
   gh workflow run release.yml --ref v0.1.0 -f resume_run=<run id> -f start_at=notarize
   ```
 
-Running the workflow by hand on a branch produces the signed DMG as an artifact
-without publishing (`-f notarize=false` skips notarization).
+Resuming keeps the version already built. Run that on the release tag (or pass
+`version` when the tag already points at this commit). A blank version only
+bumps when the run starts at `build`.
 
 The workflow reads these Secrets: `MACOS_P12_BASE64`, `MACOS_P12_PASSWORD`,
 `MACOS_NOTARY_APPLE_ID`, `MACOS_NOTARY_PASSWORD` (and optionally
