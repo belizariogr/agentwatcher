@@ -105,7 +105,13 @@ jobs:
           # Tag this commit gets published as. Blank version on a fresh run
           # bumps the patch. The tag is created with the workflow token, which
           # does not start the tag-push run, so this run is the one that publishes.
-          commit_of() { gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .sha 2>/dev/null || true; }
+          # A missing tag is HTTP 422 with a JSON body on stdout. Keep that out of the
+          # result: only a real commit sha means the tag exists.
+          commit_of() {
+            local sha
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$1" --jq .sha 2>/dev/null)" || return 0
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]] && printf '%s\n' "$sha"
+          }
           TAG=""
           if [[ "$IS_TAG" == true ]]; then
             TAG="$GITHUB_REF_NAME"
