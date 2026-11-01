@@ -331,6 +331,48 @@ final class StoreSettingsTests: XCTestCase {
     XCTAssertEqual(store.warningThreshold, 0.26, accuracy: 1e-9)
   }
 
+  func testPinnedHarnessDrivesTheIconUntilClickedAgain() async {
+    let (store, defaults) = makeStore("aw.test.pin")
+    store.refresh()
+    await waitForRefresh(store)
+    XCTAssertEqual(store.alertLevel, .critical, "automatic follows the harness closest to its limit")
+
+    store.togglePinnedProvider("a")
+    XCTAssertEqual(store.pinnedProviderID, "a")
+    XCTAssertEqual(store.iconRemaining!, 0.8, accuracy: 1e-9)
+    XCTAssertNil(store.alertLevel, "the tray follows the pinned harness, not the tighter one")
+    XCTAssertEqual(defaults.string(forKey: UsageStore.Keys.pinnedProvider), "a")
+
+    let kept = UsageStore(providers: [
+      FakeProvider(id: "a", name: "A", used: 0.2),
+      FakeProvider(id: "b", name: "B", used: 0.95),
+    ], defaults: defaults, cacheURL: nil)
+    kept.refresh()
+    await waitForRefresh(kept)
+    XCTAssertEqual(kept.pinnedProviderID, "a")
+    XCTAssertNil(kept.alertLevel)
+
+    kept.togglePinnedProvider("b")
+    XCTAssertEqual(kept.pinnedProviderID, "b")
+    XCTAssertEqual(kept.alertLevel, .critical)
+
+    kept.togglePinnedProvider("b")
+    XCTAssertNil(kept.pinnedProviderID)
+    XCTAssertNil(defaults.string(forKey: UsageStore.Keys.pinnedProvider))
+    XCTAssertEqual(kept.alertLevel, .critical)
+  }
+
+  func testHidingThePinnedHarnessReturnsToAutomatic() async {
+    let (store, _) = makeStore("aw.test.pin.hide")
+    store.refresh()
+    await waitForRefresh(store)
+    store.togglePinnedProvider("b")
+    XCTAssertEqual(store.alertLevel, .critical)
+    store.setHidden("b", true)
+    XCTAssertNil(store.pinnedProviderID)
+    XCTAssertNil(store.alertLevel)
+  }
+
   func testOldSingleThresholdBecomesOrange() {
     let defaults = UserDefaults(suiteName: "aw.test.migrate")!
     defaults.removePersistentDomain(forName: "aw.test.migrate")

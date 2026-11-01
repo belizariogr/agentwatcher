@@ -15,6 +15,8 @@ public final class UsageStore: ObservableObject {
     public static let warningThreshold = "alertThreshold"
     public static let criticalThreshold = "criticalThreshold"
     public static let hiddenProviders = "hiddenProviders"
+    /// Harness the tray icon follows. Absent means automatic: the tightest window.
+    public static let pinnedProvider = "pinnedProvider"
   }
 
   public static let refreshIntervalChoices: [TimeInterval] = [60, 120, 300, 600, 900, 1800, 3600]
@@ -55,6 +57,19 @@ public final class UsageStore: ObservableObject {
     didSet { defaults.set(hiddenProviders.sorted(), forKey: Keys.hiddenProviders) }
   }
 
+  /// When set, the tray icon follows this harness. Nil is automatic: the
+  /// account-level window closest to its limit, across every harness.
+  @Published public private(set) var pinnedProviderID: String? {
+    didSet {
+      guard pinnedProviderID != oldValue else { return }
+      if let pinnedProviderID {
+        defaults.set(pinnedProviderID, forKey: Keys.pinnedProvider)
+      } else {
+        defaults.removeObject(forKey: Keys.pinnedProvider)
+      }
+    }
+  }
+
   nonisolated public static let allProviders: [any UsageProvider] = [ClaudeProvider(), CodexProvider(), CursorProvider()]
 
   public let providers: [any UsageProvider]
@@ -82,6 +97,8 @@ public final class UsageStore: ObservableObject {
       criticalThreshold = Alert.defaultCritical < warning ? Alert.defaultCritical : max(0, warning - Alert.step)
     }
     hiddenProviders = Set(defaults.stringArray(forKey: Keys.hiddenProviders) ?? [])
+    let storedPin = defaults.string(forKey: Keys.pinnedProvider)
+    pinnedProviderID = storedPin?.isEmpty == false ? storedPin : nil
     // Last known numbers, so a rate-limited first refresh after launch still
     // has something to show and to fall back on.
     let known = Set(providers.map(\.id))
@@ -90,11 +107,17 @@ public final class UsageStore: ObservableObject {
 
   public func isHidden(_ id: String) -> Bool { hiddenProviders.contains(id) }
 
+  /// Selects `id` for the tray icon, or returns to automatic when it is already selected.
+  public func togglePinnedProvider(_ id: String) {
+    pinnedProviderID = pinnedProviderID == id ? nil : id
+  }
+
   public func setHidden(_ id: String, _ hidden: Bool) {
     guard hidden != isHidden(id) else { return }
     if hidden {
       hiddenProviders.insert(id)
       usages.removeAll { $0.id == id }
+      if pinnedProviderID == id { pinnedProviderID = nil }
     } else {
       hiddenProviders.remove(id)
       refresh(force: true)
@@ -158,8 +181,16 @@ public final class UsageStore: ObservableObject {
 
   public var worstRemaining: Double? { Alert.worstRemaining(usages) }
 
+  /// Remaining allowance drawn on the tray icon.
+  public var iconRemaining: Double? {
+    if let id = pinnedProviderID, let usage = usages.first(where: { $0.id == id }) {
+      return usage.tightest()?.remaining()
+    }
+    return worstRemaining
+  }
+
   public var alertLevel: AlertLevel? {
-    worstRemaining.flatMap { alertLevel(remaining: $0) }
+    iconRemaining.flatMap { alertLevel(remaining: $0) }
   }
 
   public func alertLevel(remaining: Double) -> AlertLevel? {
@@ -168,7 +199,7 @@ public final class UsageStore: ObservableObject {
 
   /// What the menu bar icon is drawn in; nil keeps the system color.
   public var alertColor: RGB? {
-    worstRemaining.flatMap { Alert.color(remaining: $0, warning: warningThreshold, critical: criticalThreshold) }
+    iconRemaining.flatMap { Alert.color(remaining: $0, warning: warningThreshold, critical: criticalThreshold) }
   }
 }
 
