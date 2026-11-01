@@ -45,13 +45,6 @@ struct PanelView: View {
     HStack {
       Text("Agent Watcher").font(.headline)
       Spacer()
-      if let last = store.lastRefresh {
-        TimelineView(.periodic(from: .now, by: 30)) { _ in
-          Text(last, format: .relative(presentation: .named))
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        }
-      }
       // A fixed frame, and no repeating animation: a repeatForever rotation
       // also animated the button's position while the popover laid out.
       ZStack {

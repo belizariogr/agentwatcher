@@ -72,6 +72,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       Task { @MainActor in self?.updateIcon() }
     }
 
+    // The refresh timer stands still while the Mac sleeps. Catch up on wake,
+    // once the network had a moment to come back.
+    NSWorkspace.shared.notificationCenter
+      .publisher(for: NSWorkspace.didWakeNotification)
+      .delay(for: .seconds(5), scheduler: DispatchQueue.main)
+      .sink { [weak self] _ in self?.store.refreshIfStale() }
+      .store(in: &cancellables)
+
     updateIcon()
     store.start()
 
@@ -116,7 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
       ignoreToggleUntil = nil
       return
     }
-    store.refreshIfStale()
     showPopover(below: sender)
   }
 

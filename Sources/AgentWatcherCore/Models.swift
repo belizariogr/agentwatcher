@@ -90,6 +90,12 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
     rateLimited = try c.decodeIfPresent(Bool.self, forKey: .rateLimited) ?? false
   }
 
+  /// The check itself failed (no network, a server error, a bad answer), which
+  /// a retry can fix. A rate limit or a lost login waits for the regular interval.
+  public var isTemporaryFailure: Bool {
+    message != nil && !needsLogin && !rateLimited && fetchedAt == nil
+  }
+
   /// Rows drawn in the panel. Cursor's Overall is kept for the icon only.
   public var visibleLimits: [UsageLimit] { limits.filter(\.shownInPanel) }
 

@@ -158,7 +158,14 @@ old the numbers are; the next successful check replaces them.
 
 The **Settings** button (⌘,) at the bottom of the panel opens a window with:
 
-- refresh interval (1 min to 1 h; default 5 min);
+- refresh interval (1 min to 1 h; default 5 min). Checks run in the background,
+  per harness. The time of the last one is saved, so launching the app or waking
+  the Mac only checks if one came due meanwhile. Opening the panel shows the
+  latest numbers without checking; **Refresh** checks everything right away.
+  A failed check (no network, a server error) retries that harness after 1 min,
+  twice; the third failure waits the regular interval and the count starts over.
+  A rate limit or a lost login just waits the regular interval. A saved time more
+  than 10 min in the future means the clock changed, so it checks right away;
 - launch at login;
 - alert thresholds: orange (1–50% left; default 20%) and red (0–49% left;
   default 10%, always below orange);

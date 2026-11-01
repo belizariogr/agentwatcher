@@ -285,6 +285,46 @@ struct FakeProvider: UsageProvider {
   }
 }
 
+final class CountingProvider: UsageProvider, @unchecked Sendable {
+  let id = "counting"
+  let name = "Counting"
+  private let lock = NSLock()
+  private var fetches = 0
+  var fetchCount: Int { lock.withLock { fetches } }
+  func isInstalled() -> Bool { true }
+  func fetch() async -> ProviderUsage {
+    lock.withLock { fetches += 1 }
+    return ProviderUsage(id: id, name: name, limits: [], fetchedAt: Date())
+  }
+}
+
+final class ScriptedProvider: UsageProvider, @unchecked Sendable {
+  enum Outcome { case ok, offline, rateLimited, loggedOut }
+  let id: String
+  let name = "Scripted"
+  private let lock = NSLock()
+  private var script: [Outcome]
+  private var fetches = 0
+  var fetchCount: Int { lock.withLock { fetches } }
+  init(id: String, script: [Outcome]) {
+    self.id = id
+    self.script = script
+  }
+  func isInstalled() -> Bool { true }
+  func fetch() async -> ProviderUsage {
+    let outcome = lock.withLock { () -> Outcome in
+      fetches += 1
+      return script.isEmpty ? .ok : script.removeFirst()
+    }
+    switch outcome {
+    case .ok: return ProviderUsage(id: id, name: name, limits: [UsageLimit(title: "w", used: 0.1, resetsAt: nil)], fetchedAt: Date())
+    case .offline: return ProviderUsage(id: id, name: name, message: "Could not reach.")
+    case .rateLimited: return ProviderUsage(id: id, name: name, message: "slow down", rateLimited: true)
+    case .loggedOut: return ProviderUsage(id: id, name: name, message: "Not logged in", needsLogin: true)
+    }
+  }
+}
+
 @MainActor
 final class StoreSettingsTests: XCTestCase {
   func makeStore(_ suite: String) -> (UsageStore, UserDefaults) {
@@ -314,6 +354,27 @@ final class StoreSettingsTests: XCTestCase {
     await waitForRefresh(store)
     XCTAssertEqual(store.usages.map(\.id), ["a", "b"])
     XCTAssertEqual(store.alertLevel, .critical)
+  }
+
+  func testCatchingUpRespectsTheRefreshInterval() async {
+    let provider = CountingProvider()
+    let suite = "aw.test.stale"
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    let store = UsageStore(providers: [provider], defaults: defaults, cacheURL: nil)
+    store.refreshInterval = 300
+    store.refresh()
+    await waitForRefresh(store)
+    let last = store.lastRefresh!
+    XCTAssertEqual(provider.fetchCount, 1)
+
+    store.refreshIfStale(now: last.addingTimeInterval(299))
+    await waitForRefresh(store)
+    XCTAssertEqual(provider.fetchCount, 1)
+
+    store.refreshIfStale(now: last.addingTimeInterval(300))
+    await waitForRefresh(store)
+    XCTAssertEqual(provider.fetchCount, 2)
   }
 
   func testSettingsPersist() {
@@ -404,6 +465,190 @@ final class UsageCacheTests: XCTestCase {
 
   func waitForRefresh(_ store: UsageStore) async {
     while store.isRefreshing || store.lastRefresh == nil { try? await Task.sleep(nanoseconds: 10_000_000) }
+  }
+
+  func cleanDefaults(_ suite: String) -> UserDefaults {
+    let defaults = UserDefaults(suiteName: suite)!
+    defaults.removePersistentDomain(forName: suite)
+    return defaults
+  }
+
+  func relaunchedStore(_ provider: CountingProvider, _ url: URL, suite: String) -> UsageStore {
+    UsageStore(providers: [provider], defaults: cleanDefaults(suite), cacheURL: url)
+  }
+
+  func cached(_ provider: CountingProvider) -> ProviderUsage {
+    ProviderUsage(id: provider.id, name: provider.name, limits: [], fetchedAt: Date())
+  }
+
+  func testRelaunchWithinTheIntervalDoesNotCheck() async {
+    let url = tempURL()
+    let provider = CountingProvider()
+    let savedAt = Date().addingTimeInterval(-120)
+    UsageCache(url: url).save([cached(provider)], at: savedAt)
+
+    let store = relaunchedStore(provider, url, suite: "aw.test.relaunch.fresh")
+    store.start()
+
+    XCTAssertFalse(store.isRefreshing)
+    XCTAssertEqual(provider.fetchCount, 0)
+    XCTAssertEqual(store.usages.map(\.id), [provider.id])
+    XCTAssertEqual(store.lastRefresh!.timeIntervalSince1970, savedAt.timeIntervalSince1970, accuracy: 1)
+    // Due one interval after the saved check, not one interval after the relaunch.
+    XCTAssertEqual(store.nextRefresh().timeIntervalSince(savedAt), 300, accuracy: 1)
+  }
+
+  func testRelaunchAfterTheIntervalChecks() async {
+    let url = tempURL()
+    let provider = CountingProvider()
+    UsageCache(url: url).save([cached(provider)], at: Date().addingTimeInterval(-301))
+
+    let store = relaunchedStore(provider, url, suite: "aw.test.relaunch.stale")
+    store.start()
+    await waitForRefresh(store)
+
+    XCTAssertEqual(provider.fetchCount, 1)
+  }
+
+  func testRelaunchWithNothingToShowChecks() async {
+    let url = tempURL()
+    let provider = CountingProvider()
+    UsageCache(url: url).save([], at: Date())
+
+    let store = relaunchedStore(provider, url, suite: "aw.test.relaunch.empty")
+    store.start()
+    await waitForRefresh(store)
+
+    XCTAssertEqual(provider.fetchCount, 1)
+  }
+
+  func testSavedCheckFromTheFutureDoesNotBlockChecks() async {
+    let url = tempURL()
+    let provider = CountingProvider()
+    UsageCache(url: url).save([cached(provider)], at: Date().addingTimeInterval(3600))
+
+    let store = relaunchedStore(provider, url, suite: "aw.test.relaunch.future")
+    XCTAssertLessThanOrEqual(store.nextRefresh(), Date().addingTimeInterval(300))
+    store.start()
+    await waitForRefresh(store)
+
+    XCTAssertEqual(provider.fetchCount, 1)
+  }
+
+  func testSavedCheckSlightlyInTheFutureWaits() async {
+    let url = tempURL()
+    let provider = CountingProvider()
+    UsageCache(url: url).save([cached(provider)], at: Date().addingTimeInterval(540))
+
+    let store = relaunchedStore(provider, url, suite: "aw.test.relaunch.skew")
+    store.start()
+
+    XCTAssertFalse(store.isRefreshing)
+    XCTAssertEqual(provider.fetchCount, 0)
+  }
+
+  func testClockChangePutsTheCurrentDateBack() async {
+    let url = tempURL()
+    let provider = CountingProvider()
+    UsageCache(url: url).save([cached(provider)], at: Date().addingTimeInterval(660))
+
+    let store = relaunchedStore(provider, url, suite: "aw.test.relaunch.clock")
+    store.start()
+    await waitForRefresh(store)
+    XCTAssertEqual(provider.fetchCount, 1)
+
+    let reloaded = relaunchedStore(provider, url, suite: "aw.test.relaunch.clock")
+    XCTAssertEqual(reloaded.lastRefresh!.timeIntervalSinceNow, 0, accuracy: 5)
+    reloaded.refreshIfStale()
+    XCTAssertEqual(provider.fetchCount, 1)
+  }
+
+  /// Advances the clock the schedule sees and runs whatever is due.
+  func catchUp(_ store: UsageStore, after seconds: TimeInterval) async {
+    store.refreshIfStale(now: Date().addingTimeInterval(seconds))
+    await waitForRefresh(store)
+  }
+
+  func testFailuresRetryTwiceAfterAMinuteThenWaitTheInterval() async {
+    let provider = ScriptedProvider(id: "a", script: [.offline, .offline, .offline, .offline, .ok])
+    let retrying = UsageStore(providers: [provider], defaults: cleanDefaults("aw.test.retry"), cacheURL: nil)
+
+    retrying.refresh()
+    await waitForRefresh(retrying)
+    XCTAssertEqual(retrying.failureCount("a"), 1)
+
+    await catchUp(retrying, after: 59)
+    XCTAssertEqual(provider.fetchCount, 1)
+    await catchUp(retrying, after: 61)
+    XCTAssertEqual(provider.fetchCount, 2)
+    XCTAssertEqual(retrying.failureCount("a"), 2)
+
+    await catchUp(retrying, after: 61)
+    XCTAssertEqual(provider.fetchCount, 3)
+    XCTAssertEqual(retrying.failureCount("a"), 3)
+
+    // Third failure: back to the interval.
+    await catchUp(retrying, after: 61)
+    await catchUp(retrying, after: 299)
+    XCTAssertEqual(provider.fetchCount, 3)
+    await catchUp(retrying, after: 301)
+    XCTAssertEqual(provider.fetchCount, 4)
+    XCTAssertEqual(retrying.failureCount("a"), 1, "the process starts over")
+
+    await catchUp(retrying, after: 61)
+    XCTAssertEqual(provider.fetchCount, 5)
+    XCTAssertEqual(retrying.failureCount("a"), 0, "a good check clears the count")
+
+    await catchUp(retrying, after: 61)
+    XCTAssertEqual(provider.fetchCount, 5)
+  }
+
+  func testRateLimitAndLostLoginOnlyWaitTheInterval() async {
+    for outcome in [ScriptedProvider.Outcome.rateLimited, .loggedOut] {
+      let provider = ScriptedProvider(id: "a", script: [outcome, outcome])
+      let limited = UsageStore(providers: [provider], defaults: cleanDefaults("aw.test.noretry"), cacheURL: nil)
+
+      limited.refresh()
+      await waitForRefresh(limited)
+      XCTAssertEqual(limited.failureCount("a"), 0)
+
+      await catchUp(limited, after: 61)
+      XCTAssertEqual(provider.fetchCount, 1)
+      await catchUp(limited, after: 301)
+      XCTAssertEqual(provider.fetchCount, 2)
+    }
+  }
+
+  func testRetryLeavesTheOtherHarnessesAlone() async {
+    let failing = ScriptedProvider(id: "a", script: [.offline, .ok])
+    let limited = ScriptedProvider(id: "b", script: [.rateLimited])
+    let healthy = ScriptedProvider(id: "c", script: [.ok])
+    let partial = UsageStore(providers: [failing, limited, healthy], defaults: cleanDefaults("aw.test.partial"), cacheURL: nil)
+
+    partial.refresh()
+    await waitForRefresh(partial)
+    await catchUp(partial, after: 61)
+
+    XCTAssertEqual(failing.fetchCount, 2)
+    XCTAssertEqual(limited.fetchCount, 1)
+    XCTAssertEqual(healthy.fetchCount, 1)
+    XCTAssertEqual(partial.usages.map(\.id), ["a", "b", "c"])
+  }
+
+  func testFailureCountSurvivesARelaunch() async {
+    let url = tempURL()
+    let provider = ScriptedProvider(id: "a", script: [.offline])
+    let defaults = cleanDefaults("aw.test.failures")
+    let first = UsageStore(providers: [provider], defaults: defaults, cacheURL: url)
+    first.refresh()
+    await waitForRefresh(first)
+
+    let second = UsageStore(providers: [provider], defaults: defaults, cacheURL: url)
+    XCTAssertEqual(second.failureCount("a"), 1)
+    second.refreshIfStale()
+    XCTAssertEqual(provider.fetchCount, 1, "still within the minute")
+    await catchUp(second, after: 61)
+    XCTAssertEqual(provider.fetchCount, 2)
   }
 
   func testEveryRefreshIsSavedToDisk() async {
