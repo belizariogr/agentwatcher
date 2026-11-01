@@ -94,10 +94,16 @@ final class AlertTests: XCTestCase {
     XCTAssertEqual(merged.plan, "Max")
   }
 
-  func testLostLoginDropsLastKnownLimits() {
-    let old = ProviderUsage(id: "c", name: "C", plan: "Max", limits: [UsageLimit(title: "w", used: 0.4, resetsAt: nil)], fetchedAt: Date())
-    let loggedOut = ProviderUsage(id: "c", name: "C", message: "Not logged in", needsLogin: true)
-    XCTAssertEqual(loggedOut.merged(withPrevious: old), loggedOut)
+  func testLostLoginKeepsLastKnownLimitsAndSaysSo() {
+    let measured = Date(timeIntervalSince1970: 1_800_000_000)
+    let old = ProviderUsage(id: "c", name: "C", plan: "Max", limits: [UsageLimit(title: "w", used: 0.4, resetsAt: nil)], fetchedAt: measured)
+    let expired = ProviderUsage(id: "c", name: "C", message: "Token expired", needsLogin: true)
+    let merged = expired.merged(withPrevious: old)
+    XCTAssertEqual(merged.limits, old.limits)
+    XCTAssertEqual(merged.fetchedAt, measured)
+    XCTAssertEqual(merged.plan, "Max")
+    XCTAssertEqual(merged.message, "Token expired")
+    XCTAssertTrue(merged.needsLogin)
   }
 }
 
@@ -409,16 +415,23 @@ struct LoggedOutProvider: UsageProvider {
 
 @MainActor
 final class LoggedOutTests: XCTestCase {
-  func testLostLoginReplacesCachedValuesOnScreenAndOnDisk() async {
+  func testLostLoginKeepsCachedValuesOnScreenAndOnDisk() async {
     let url = FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString)/usage.json")
     UsageCache(url: url).save([ProviderUsage(id: "a", name: "A", limits: [UsageLimit(title: "w", used: 0.9, resetsAt: nil)], fetchedAt: Date())])
     let store = UsageStore(providers: [LoggedOutProvider(id: "a", name: "A")], defaults: .init(suiteName: "aw.test.logout")!, cacheURL: url)
     store.refresh()
     while store.isRefreshing || store.lastRefresh == nil { try? await Task.sleep(nanoseconds: 10_000_000) }
-    XCTAssertEqual(store.usages.first?.limits, [])
+    XCTAssertEqual(store.usages.first?.limits.first?.used, 0.9)
     XCTAssertEqual(store.usages.first?.needsLogin, true)
-    XCTAssertNil(store.alertLevel, "a logged-out harness does not color the icon")
-    XCTAssertEqual(UsageCache(url: url).load().first?.limits, [])
+    XCTAssertEqual(store.alertLevel, .critical, "the kept numbers still color the icon")
+    XCTAssertEqual(UsageCache(url: url).load().first?.limits.first?.used, 0.9)
+    XCTAssertEqual(UsageCache(url: url).load().first?.needsLogin, true)
+  }
+
+  func testRenewedLoginReplacesKeptValues() {
+    let kept = ProviderUsage(id: "a", name: "A", limits: [UsageLimit(title: "w", used: 0.9, resetsAt: nil)], message: "Token expired", needsLogin: true)
+    let renewed = ProviderUsage(id: "a", name: "A", limits: [UsageLimit(title: "w", used: 0.2, resetsAt: nil)], fetchedAt: Date())
+    XCTAssertEqual(renewed.merged(withPrevious: kept), renewed)
   }
 
   func testOldCacheWithoutNeedsLoginStillLoads() throws {
