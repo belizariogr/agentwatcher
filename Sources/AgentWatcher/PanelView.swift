@@ -21,7 +21,13 @@ struct PanelView: View {
           .padding(.vertical, 24)
       } else {
         ForEach(store.usages) { usage in
-          ProviderCard(usage: usage, warning: store.warningThreshold, critical: store.criticalThreshold)
+          ProviderCard(
+            usage: usage,
+            warning: store.warningThreshold,
+            critical: store.criticalThreshold,
+            selected: store.pinnedProviderID == usage.id,
+            onSelect: { store.togglePinnedProvider(usage.id) }
+          )
         }
       }
 
@@ -116,8 +122,21 @@ struct ProviderCard: View {
   let usage: ProviderUsage
   let warning: Double
   let critical: Double
+  var selected: Bool = false
+  var onSelect: () -> Void = {}
 
   var body: some View {
+    Button(action: onSelect) {
+      card
+    }
+    .buttonStyle(.plain)
+    .accessibilityAddTraits(selected ? .isSelected : [])
+    .help(selected
+      ? "Menu bar icon follows \(usage.name). Click again for automatic."
+      : "Show \(usage.name) on the menu bar icon")
+  }
+
+  private var card: some View {
     VStack(alignment: .leading, spacing: 8) {
       HStack(spacing: 8) {
         ProviderLogo(id: usage.id, size: 18)
@@ -159,9 +178,22 @@ struct ProviderCard: View {
         LimitRow(limit: limit, warning: warning, critical: critical)
       }
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .padding(10)
     .background(.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
-    .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(.separator))
+    .overlay(alignment: .topTrailing) {
+      if selected {
+        Image(systemName: "checkmark.circle.fill")
+          .font(.system(size: 14))
+          .foregroundStyle(.white, Color.green)
+          .padding(6)
+          .accessibilityHidden(true)
+      }
+    }
+    .overlay(
+      RoundedRectangle(cornerRadius: 8)
+        .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
+    )
   }
 
 }
