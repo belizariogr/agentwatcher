@@ -57,9 +57,9 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
   public var message: String?
   /// When `limits` were measured.
   public var fetchedAt: Date?
-  /// The harness has no usable login (missing, expired or rejected). Unlike a
-  /// rate limit or a network error, old numbers are not kept: they belong to
-  /// a session that is gone.
+  /// The harness has no usable login (missing, expired or rejected). The last
+  /// numbers stay on screen, labelled as old: a token left to expire says
+  /// nothing about the allowance, which other machines may still be using.
   public var needsLogin: Bool
   /// The endpoint asked us to slow down. Routine (Anthropic rate-limits the
   /// usage endpoint readily), so the panel keeps the last numbers silently.
@@ -108,10 +108,10 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
   }
 
   /// Keep the last good numbers when a refresh fails (the Claude endpoint
-  /// rate-limits readily), but surface why they are not fresh. A lost login
-  /// drops them instead.
+  /// rate-limits readily) or the login is gone, but surface why they are not
+  /// fresh. The next good refresh replaces them.
   public func merged(withPrevious previous: ProviderUsage?) -> ProviderUsage {
-    guard limits.isEmpty, !needsLogin, let previous, !previous.limits.isEmpty else { return self }
+    guard limits.isEmpty, let previous, !previous.limits.isEmpty else { return self }
     var copy = self
     copy.limits = previous.limits
     copy.fetchedAt = previous.fetchedAt

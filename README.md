@@ -144,8 +144,8 @@ If a refresh fails, the panel keeps the last known numbers. A rate limit
 other failures (e.g. the network) add a warning and how old the numbers are. Every
 check is saved to `~/Library/Application Support/AgentWatcher/usage.json`, so
 the last known numbers survive a relaunch too. A missing, expired or rejected
-login is different: the old numbers are dropped and the harness shows that it
-needs a login.
+login keeps them as well, under a notice that the harness needs a login and how
+old the numbers are; the next successful check replaces them.
 
 ## Settings
 
