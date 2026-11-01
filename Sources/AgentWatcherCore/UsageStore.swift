@@ -26,7 +26,7 @@ public final class UsageStore: ObservableObject {
     didSet {
       guard refreshInterval != oldValue else { return }
       defaults.set(refreshInterval, forKey: Keys.refreshInterval)
-      scheduleTimer()
+      if timer != nil { scheduleTimer() }
     }
   }
 
@@ -76,6 +76,9 @@ public final class UsageStore: ObservableObject {
   private let defaults: UserDefaults
   private let cache: UsageCache?
   private var timer: Timer?
+  /// When each harness was last checked and how its failures stand. Saved with
+  /// the usages, so the schedule survives a relaunch.
+  private var checks: [String: HarnessCheck] = [:]
 
   public init(
     providers: [any UsageProvider] = UsageStore.allProviders,
@@ -102,7 +105,17 @@ public final class UsageStore: ObservableObject {
     // Last known numbers, so a rate-limited first refresh after launch still
     // has something to show and to fall back on.
     let known = Set(providers.map(\.id))
-    usages = (cache?.load() ?? []).filter { known.contains($0.id) && !hiddenProviders.contains($0.id) }
+    let stored = cache?.read()
+    usages = (stored?.usages ?? []).filter { known.contains($0.id) && !hiddenProviders.contains($0.id) }
+    // When they were checked, so a relaunch doesn't check ahead of the interval.
+    // Files from older versions only have the time of the whole check.
+    lastRefresh = stored?.savedAt
+    checks = stored?.checks ?? [:]
+    if let savedAt = stored?.savedAt {
+      for usage in usages where checks[usage.id] == nil {
+        checks[usage.id] = HarnessCheck(lastCheck: savedAt)
+      }
+    }
   }
 
   public func isHidden(_ id: String) -> Bool { hiddenProviders.contains(id) }
@@ -120,61 +133,94 @@ public final class UsageStore: ObservableObject {
       if pinnedProviderID == id { pinnedProviderID = nil }
     } else {
       hiddenProviders.remove(id)
-      refresh(force: true)
+      // It has nothing to show yet. Mid-refresh, it gets its own fetch after.
+      if isRefreshing { pendingRefresh.insert(id) } else { fetch([id]) }
     }
   }
 
   // MARK: Refreshing
 
   public func start() {
-    refresh()
+    refreshIfStale()
     scheduleTimer()
   }
 
   private func scheduleTimer() {
     timer?.invalidate()
-    timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
-      Task { @MainActor in self?.refresh() }
+    let timer = Timer(fire: nextRefresh(), interval: 0, repeats: false) { [weak self] _ in
+      Task { @MainActor in self?.refreshIfStale() }
+    }
+    RunLoop.main.add(timer, forMode: .default)
+    self.timer = timer
+  }
+
+  private var watchedProviders: [any UsageProvider] {
+    providers.filter { !hiddenProviders.contains($0.id) && $0.isInstalled() }
+  }
+
+  /// A harness never checked is due right away.
+  private func due(_ provider: any UsageProvider, now: Date) -> Date {
+    checks[provider.id]?.due(interval: refreshInterval, now: now) ?? now
+  }
+
+  /// When the next automatic check is due, for whichever harness comes first.
+  public func nextRefresh(now: Date = Date()) -> Date {
+    watchedProviders.map { due($0, now: now) }.min() ?? now.addingTimeInterval(refreshInterval)
+  }
+
+  /// Failures in a row of a harness' current cycle.
+  public func failureCount(_ id: String) -> Int { checks[id]?.failures ?? 0 }
+
+  /// Checks only the harnesses that are due, so retrying one never hits the
+  /// others ahead of the interval. Launching, waking the Mac and the timer all
+  /// come through here.
+  public func refreshIfStale(now: Date = Date()) {
+    let ids = watchedProviders.filter { due($0, now: now) <= now }.map(\.id)
+    if ids.isEmpty {
+      if timer != nil { scheduleTimer() }
+    } else {
+      fetch(Set(ids))
     }
   }
 
-  /// Refresh unless the numbers are younger than `maxAge`. Opening the panel
-  /// uses this so clicking around doesn't hammer the endpoints.
-  public func refreshIfStale(maxAge: TimeInterval = 60) {
-    if let lastRefresh, Date().timeIntervalSince(lastRefresh) < maxAge { return }
-    refresh()
-  }
+  private var pendingRefresh: Set<String> = []
 
-  private var pendingRefresh = false
+  /// Checks every harness now, whatever is due.
+  public func refresh() { fetch(nil) }
 
-  public func refresh(force: Bool = false) {
-    guard !isRefreshing else {
-      // A harness shown mid-refresh still needs its own fetch.
-      if force { pendingRefresh = true }
-      return
-    }
+  private func fetch(_ ids: Set<String>?) {
+    guard !isRefreshing else { return }
     isRefreshing = true
-    let watched = providers.filter { !hiddenProviders.contains($0.id) && $0.isInstalled() }
-    let previous = Dictionary(uniqueKeysWithValues: usages.map { ($0.id, $0) })
+    let watched = watchedProviders.filter { ids?.contains($0.id) ?? true }
     Task {
-      let fresh = await withTaskGroup(of: (Int, ProviderUsage).self) { group in
-        for (index, provider) in watched.enumerated() {
-          group.addTask { (index, await provider.fetch()) }
+      let fresh = await withTaskGroup(of: ProviderUsage.self) { group in
+        for provider in watched {
+          group.addTask { await provider.fetch() }
         }
-        var results: [(Int, ProviderUsage)] = []
+        var results: [ProviderUsage] = []
         for await result in group { results.append(result) }
-        return results.sorted { $0.0 < $1.0 }.map(\.1)
+        return results
+      }
+      let now = Date()
+      // A partial check leaves the other harnesses as they are; a full one
+      // also drops what is no longer installed.
+      var latest = ids == nil ? [:] : Dictionary(uniqueKeysWithValues: self.usages.map { ($0.id, $0) })
+      let previous = Dictionary(uniqueKeysWithValues: self.usages.map { ($0.id, $0) })
+      for usage in fresh {
+        latest[usage.id] = usage.merged(withPrevious: previous[usage.id])
+        self.checks[usage.id] = (self.checks[usage.id] ?? HarnessCheck(lastCheck: now)).recording(usage, at: now)
       }
       // Hidden while the fetch was in flight: drop it.
-      self.usages = fresh
-        .filter { !self.hiddenProviders.contains($0.id) }
-        .map { $0.merged(withPrevious: previous[$0.id]) }
-      self.lastRefresh = Date()
+      self.usages = self.providers.compactMap { latest[$0.id] }.filter { !self.hiddenProviders.contains($0.id) }
+      self.lastRefresh = now
       self.isRefreshing = false
-      self.cache?.save(self.usages)
-      if self.pendingRefresh {
-        self.pendingRefresh = false
-        self.refresh()
+      self.cache?.save(self.usages, at: now, checks: self.checks)
+      if !self.pendingRefresh.isEmpty {
+        let pending = self.pendingRefresh
+        self.pendingRefresh = []
+        self.fetch(pending)
+      } else if self.timer != nil {
+        self.scheduleTimer()
       }
     }
   }
@@ -203,6 +249,35 @@ public final class UsageStore: ObservableObject {
   }
 }
 
+/// When a harness was last checked and how many failures it has in a row.
+public struct HarnessCheck: Codable, Equatable, Sendable {
+  /// Failures in a row that retry after `retryDelay`: the first and the second.
+  /// The third waits the regular interval, and the next failure starts over.
+  public static let failuresPerCycle = 3
+  public static let retryDelay: TimeInterval = 60
+  /// A check further ahead than this means the clock changed: check right away.
+  public static let clockTolerance: TimeInterval = 600
+
+  public var lastCheck: Date
+  public var failures: Int
+
+  public init(lastCheck: Date, failures: Int = 0) {
+    self.lastCheck = lastCheck
+    self.failures = failures
+  }
+
+  public func recording(_ usage: ProviderUsage, at date: Date) -> HarnessCheck {
+    guard usage.isTemporaryFailure else { return HarnessCheck(lastCheck: date) }
+    return HarnessCheck(lastCheck: date, failures: failures >= Self.failuresPerCycle ? 1 : failures + 1)
+  }
+
+  public func due(interval: TimeInterval, now: Date) -> Date {
+    if lastCheck.timeIntervalSince(now) > Self.clockTolerance { return now }
+    let retrying = failures > 0 && failures < Self.failuresPerCycle
+    return lastCheck.addingTimeInterval(retrying ? Self.retryDelay : interval)
+  }
+}
+
 /// The usages of the last check, on disk. Rewritten after every refresh.
 public struct UsageCache: Sendable {
   public let url: URL
@@ -214,23 +289,27 @@ public struct UsageCache: Sendable {
       .appendingPathComponent("AgentWatcher/usage.json")
   }
 
-  private struct File: Codable {
+  fileprivate struct File: Codable {
     var savedAt: Date
     var usages: [ProviderUsage]
+    /// Absent in files from older versions.
+    var checks: [String: HarnessCheck]?
   }
 
-  public func load() -> [ProviderUsage] {
-    guard let data = try? Data(contentsOf: url) else { return [] }
+  public func load() -> [ProviderUsage] { read()?.usages ?? [] }
+
+  fileprivate func read() -> File? {
+    guard let data = try? Data(contentsOf: url) else { return nil }
     let decoder = JSONDecoder()
     decoder.dateDecodingStrategy = .iso8601
-    return (try? decoder.decode(File.self, from: data))?.usages ?? []
+    return try? decoder.decode(File.self, from: data)
   }
 
-  public func save(_ usages: [ProviderUsage]) {
+  public func save(_ usages: [ProviderUsage], at savedAt: Date = Date(), checks: [String: HarnessCheck]? = nil) {
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
     encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-    guard let data = try? encoder.encode(File(savedAt: Date(), usages: usages)) else { return }
+    guard let data = try? encoder.encode(File(savedAt: savedAt, usages: usages, checks: checks)) else { return }
     try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     try? data.write(to: url, options: .atomic)
   }
