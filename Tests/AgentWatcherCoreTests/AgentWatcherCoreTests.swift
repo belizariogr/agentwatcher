@@ -238,6 +238,81 @@ final class ClaudeParsingTests: XCTestCase {
     XCTAssertEqual(ClaudeProvider.userAgent(fromVersionOutput: "not a version"), ClaudeProvider.fallbackUserAgent)
   }
 
+  func testUsageLimitReachedTurnsTheMatchingWindowIntoAnX() throws {
+    let future = Date().addingTimeInterval(3600)
+    let line = """
+    {"type":"assistant","apiError":"usage_limit_reached","quotaLimits":{"status":"rejected","resetsAt":\(future.timeIntervalSince1970),"rateLimitType":"seven_day"},"error":"rate_limit","isApiErrorMessage":true}
+    """
+    let hit = try XCTUnwrap(ClaudeProvider.reachedWindow(in: Data(line.utf8)))
+    XCTAssertEqual(hit.title, "Weekly")
+
+    let limits = ClaudeProvider.applyReachedWindows(
+      [UsageLimit(title: "Weekly", used: 1, resetsAt: future, fullIsExact: false)],
+      windows: [hit.title: hit.resetsAt]
+    )
+    XCTAssertTrue(limits[0].isExhausted())
+    XCTAssertEqual(limits[0].percentLeftText(), "0%")
+    XCTAssertTrue(ProviderUsage(id: "claude", name: "Claude Code", limits: limits).isExhausted())
+  }
+
+  func testFullReadingWithoutUsageLimitReachedKeepsTheBang() {
+    let future = Date().addingTimeInterval(3600)
+    let limits = ClaudeProvider.applyReachedWindows(
+      [UsageLimit(title: "Weekly", used: 1, resetsAt: future, fullIsExact: false)],
+      windows: ["Weekly": Date().addingTimeInterval(-60)]
+    )
+    XCTAssertFalse(limits[0].isExhausted())
+    XCTAssertEqual(limits[0].percentLeftText(), "<1%")
+    XCTAssertFalse(ProviderUsage(id: "claude", name: "Claude Code", limits: limits).isExhausted())
+  }
+
+  func testSessionBlockDoesNotMarkTheWeeklyWindow() throws {
+    let future = Date().addingTimeInterval(3600)
+    let line = """
+    {"apiError":"usage_limit_reached","apiErrorParams":{"rate_limit_info":{"status":"rejected","resetsAt":\(Int(future.timeIntervalSince1970)),"rateLimitType":"five_hour"}}}
+    """
+    let hit = try XCTUnwrap(ClaudeProvider.reachedWindow(in: Data(line.utf8)))
+    XCTAssertEqual(hit.title, "Session (5h)")
+    let limits = ClaudeProvider.applyReachedWindows(
+      [
+        UsageLimit(title: "Session (5h)", used: 0.4, resetsAt: nil, fullIsExact: false),
+        UsageLimit(title: "Weekly", used: 1, resetsAt: future, fullIsExact: false),
+      ],
+      windows: [hit.title: hit.resetsAt]
+    )
+    XCTAssertTrue(limits[0].isExhausted())
+    XCTAssertFalse(limits[1].isExhausted())
+  }
+
+  func testMentionOfTheMarkerWithoutTheErrorIsIgnored() {
+    let line = #"{"type":"user","message":{"content":"usage_limit_reached"}}"#
+    XCTAssertNil(ClaudeProvider.reachedWindow(in: Data(line.utf8)))
+    let allowed = #"{"apiError":"usage_limit_reached","quotaLimits":{"status":"allowed","resetsAt":1893456000,"rateLimitType":"seven_day"}}"#
+    XCTAssertNil(ClaudeProvider.reachedWindow(in: Data(allowed.utf8)))
+  }
+
+  func testReachedWindowsReadsRecentSessionLogsOnly() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent("aw-\(UUID().uuidString)")
+    let fresh = root.appendingPathComponent("projects/demo")
+    let stale = root.appendingPathComponent("projects/old")
+    try FileManager.default.createDirectory(at: fresh, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: stale, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let future = Date().addingTimeInterval(7200)
+    let record = """
+    {"apiError":"usage_limit_reached","quotaLimits":{"status":"rejected","resetsAt":\(future.timeIntervalSince1970),"rateLimitType":"seven_day"}}
+    """
+    try Data(record.utf8).write(to: fresh.appendingPathComponent("session.jsonl"))
+    try Data(record.utf8).write(to: stale.appendingPathComponent("session.jsonl"))
+    try FileManager.default.setAttributes(
+      [.modificationDate: Date().addingTimeInterval(-(ClaudeProvider.reachedLookback + 3600))],
+      ofItemAtPath: stale.appendingPathComponent("session.jsonl").path
+    )
+    let windows = ClaudeProvider.reachedWindows(in: root)
+    XCTAssertEqual(windows.keys.sorted(), ["Weekly"])
+    XCTAssertEqual(windows["Weekly"]!.timeIntervalSince1970, future.timeIntervalSince1970, accuracy: 0.001)
+  }
+
   func testPlanLabel() {
     XCTAssertEqual(ClaudeProvider.planLabel(tier: "default_claude_max_20x", subscription: "max"), "Max 20x")
     XCTAssertEqual(ClaudeProvider.planLabel(tier: "default_claude_max_5x", subscription: "team"), "Team 5x")

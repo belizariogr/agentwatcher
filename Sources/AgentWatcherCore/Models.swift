@@ -15,9 +15,9 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
   /// Cursor's Overall figure drives the icon but is not a third quota, so it
   /// stays off the panel when the two pools are listed.
   public let shownInPanel: Bool
-  /// Whether a reading of 100% used really means nothing is left. Anthropic
-  /// reports whole percents, so its 100 can still have room: Claude Code keeps
-  /// working there.
+  /// Whether a reading of 100% used really means requests stop. Claude Code
+  /// keeps working at Anthropic's 100: usage can run past a window's cap, and
+  /// only the request's own status says whether it is refused.
   public let fullIsExact: Bool
 
   public init(title: String, used: Double, resetsAt: Date?, countsTowardAlert: Bool = true, shownInPanel: Bool = true, fullIsExact: Bool = true) {
