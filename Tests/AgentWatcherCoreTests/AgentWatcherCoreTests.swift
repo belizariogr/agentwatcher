@@ -40,15 +40,18 @@ final class AlertTests: XCTestCase {
     XCTAssertEqual(Alert.percentLeftText(0.0299), "2%")
     XCTAssertEqual(Alert.percentLeftText(0.01999), "1.99%")
     XCTAssertEqual(Alert.percentLeftText(1 - 0.9863), "1.37%")
-    XCTAssertEqual(Alert.percentLeftText(0.01), "1.00%")
+    XCTAssertEqual(Alert.percentLeftText(0.01), "1%")
+    XCTAssertEqual(Alert.percentLeftText(1 - 0.99), "1%")
+    XCTAssertEqual(Alert.percentLeftText(0.015), "1.50%")
     XCTAssertEqual(Alert.percentLeftText(0.0005), "0.05%")
-    XCTAssertEqual(Alert.percentLeftText(0), "0.00%")
-    XCTAssertEqual(Alert.percentLeftText(-0.1), "0.00%")
+    XCTAssertEqual(Alert.percentLeftText(0), "0%")
+    XCTAssertEqual(Alert.percentLeftText(-0.1), "0%")
 
     XCTAssertEqual(Alert.percentUsedText(0.5), "50%")
     XCTAssertEqual(Alert.percentUsedText(0.0299), "98%")
     XCTAssertEqual(Alert.percentUsedText(1 - 0.9863), "98.63%")
-    XCTAssertEqual(Alert.percentUsedText(0), "100.00%")
+    XCTAssertEqual(Alert.percentUsedText(0.01), "99%")
+    XCTAssertEqual(Alert.percentUsedText(0), "100%")
   }
 
   func testExhaustedOnlyWhenNothingIsLeftAtTheShownPrecision() {

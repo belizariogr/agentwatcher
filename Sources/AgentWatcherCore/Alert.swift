@@ -45,7 +45,8 @@ public enum Alert {
   }
 
   /// The label for what is left: whole percents, then two decimals under 2%
-  /// so the last stretch can be followed. Truncated like `percentLeft`.
+  /// (when they are not .00) so the last stretch can be followed. Truncated
+  /// like `percentLeft`.
   public static func percentLeftText(_ remaining: Double) -> String {
     let left = hundredthsLeft(remaining)
     return left < 200 ? hundredthsText(left) : "\(percentLeft(remaining))%"
@@ -67,8 +68,10 @@ public enum Alert {
     min(max(Int((remaining * 10000 + 1e-7).rounded(.down)), 0), 10000)
   }
 
+  /// A whole value stays whole: harnesses that only report integers read
+  /// "1%", not "1.00%".
   private static func hundredthsText(_ value: Int) -> String {
-    String(format: "%d.%02d%%", value / 100, value % 100)
+    value % 100 == 0 ? "\(value / 100)%" : String(format: "%d.%02d%%", value / 100, value % 100)
   }
 
   /// Thresholds are whole percents already; this only absorbs float noise.
