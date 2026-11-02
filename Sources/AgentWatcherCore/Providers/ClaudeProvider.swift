@@ -105,7 +105,7 @@ public struct ClaudeProvider: UsageProvider {
           usage.message = "Invalid response from Anthropic's usage endpoint."
           return usage
         }
-        usage.limits = Self.parseLimits(payload)
+        usage.limits = Self.applyReachedWindows(Self.parseLimits(payload), windows: Self.reachedWindows(in: configDir))
         usage.fetchedAt = Date()
         if usage.limits.isEmpty { usage.message = "Anthropic returned no limits." }
       case 401, 403:
@@ -142,6 +142,80 @@ public struct ClaudeProvider: UsageProvider {
       return fallbackUserAgent
     }
     return "claude-code/\(line[range])"
+  }
+
+  /// The usage endpoint stays at 100 with `locked_reason` null both while Claude
+  /// is still working and after requests are refused. The refusal is recorded
+  /// on the session (`apiError` `usage_limit_reached`); that is the only signal
+  /// that turns the bang into an X. A window whose reset has passed is ignored.
+  static let reachedMarker = Data("\"usage_limit_reached\"".utf8)
+  /// A block is written when it happens and lasts at most a week, so older
+  /// transcripts cannot still be in force.
+  static let reachedLookback: TimeInterval = 8 * 24 * 60 * 60
+
+  static func reachedWindows(in configDir: URL, now: Date = Date()) -> [String: Date] {
+    let projects = configDir.appendingPathComponent("projects")
+    guard let enumerator = FileManager.default.enumerator(
+      at: projects,
+      includingPropertiesForKeys: [.contentModificationDateKey],
+      options: [.skipsHiddenFiles]
+    ) else { return [:] }
+    let cutoff = now.addingTimeInterval(-reachedLookback)
+    var found: [String: Date] = [:]
+    for case let url as URL in enumerator {
+      guard url.pathExtension == "jsonl" else { continue }
+      if let modified = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate,
+         modified < cutoff { continue }
+      guard let data = try? Data(contentsOf: url, options: [.mappedIfSafe]),
+            data.range(of: reachedMarker) != nil else { continue }
+      for line in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+        guard line.range(of: reachedMarker) != nil,
+              let hit = reachedWindow(in: Data(line)),
+              found[hit.title].map({ hit.resetsAt > $0 }) ?? true else { continue }
+        found[hit.title] = hit.resetsAt
+      }
+    }
+    return found
+  }
+
+  /// `seven_day` colors Weekly; `five_hour` colors the session. Anything else
+  /// (a model bucket) does not drive the icon.
+  static func reachedWindow(in line: Data) -> (title: String, resetsAt: Date)? {
+    guard let json = (try? JSONSerialization.jsonObject(with: line)) as? JSON,
+          json.string("apiError") == "usage_limit_reached" else { return nil }
+    let info = json.object("quotaLimits") ?? json.object("apiErrorParams")?.object("rate_limit_info")
+    guard let info, let resetsAt = Dates.parse(info["resetsAt"]) else { return nil }
+    if let status = info.string("status"), status != "rejected" { return nil }
+    switch info.string("rateLimitType") {
+    case "seven_day": return ("Weekly", resetsAt)
+    case "five_hour": return ("Session (5h)", resetsAt)
+    default: return nil
+    }
+  }
+
+  /// A confirmed block is a full window: the X stays until `resetsAt`.
+  /// Readings the endpoint still reports as 100 stay inexact, so the bang stays.
+  static func applyReachedWindows(_ limits: [UsageLimit], windows: [String: Date], now: Date = Date()) -> [UsageLimit] {
+    let active = windows.filter { $0.value > now }
+    guard !active.isEmpty else { return limits }
+    var updated = limits
+    for (title, resetsAt) in active {
+      let blocked = UsageLimit(title: title, used: 1, resetsAt: resetsAt, fullIsExact: true)
+      if let index = updated.firstIndex(where: { $0.title == title && $0.countsTowardAlert }) {
+        let current = updated[index]
+        updated[index] = UsageLimit(
+          title: current.title,
+          used: 1,
+          resetsAt: resetsAt,
+          countsTowardAlert: true,
+          shownInPanel: current.shownInPanel,
+          fullIsExact: true
+        )
+      } else {
+        updated.append(blocked)
+      }
+    }
+    return updated
   }
 
   static func parseLimits(_ payload: JSON) -> [UsageLimit] {

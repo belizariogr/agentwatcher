@@ -18,8 +18,10 @@ in Swift/SwiftUI.
   as it nears **10%**. At **10% or less** the sparkle in the middle becomes a
   bang. At **0%** the bang becomes an X. Both thresholds are configurable. Under
   **2%** left, the percentages show two decimals (`1.37% left`). Claude's usage
-  endpoint reports whole percents and Claude Code keeps working at its 100, so
-  that reading shows `<1% left` and keeps the bang instead of the X.
+  endpoint can read 100 while requests still succeed, and it never says when
+  they stop, so that reading shows `<1% left` and keeps the bang. The bang
+  becomes an X for Claude only after a local session records
+  `usage_limit_reached` for a window that has not reset yet.
 
 ## Install
 
