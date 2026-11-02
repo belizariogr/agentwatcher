@@ -109,7 +109,7 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
   /// not a row in the panel.
   public func tooltipLine(now: Date = Date()) -> String {
     guard let tight = tightest(now: now) else { return "\(name): no data" }
-    let percent = "\(Alert.percentLeft(tight.remaining(now: now)))% left"
+    let percent = "\(Alert.percentLeftText(tight.remaining(now: now))) left"
     return tight.shownInPanel ? "\(name): \(percent) (\(tight.title))" : "\(name): \(percent)"
   }
 
