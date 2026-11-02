@@ -92,7 +92,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   private func updateIcon() {
     guard let button = statusItem.button else { return }
     let remaining = store.iconRemaining
-    button.image = StatusIcon.image(used: remaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical)
+    let exhausted = remaining.map { Alert.percentLeft($0) == 0 } ?? false
+    button.image = StatusIcon.image(used: remaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical, exhausted: exhausted)
     button.toolTip = tooltip()
   }
 
@@ -317,6 +318,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--icons") {
     write(StatusIcon.image(used: 0.45, alert: nil), "icon-tray.png")
     write(StatusIcon.image(used: 0.82, alert: Alert.orange), "icon-warning.png")
     write(StatusIcon.image(used: 0.94, alert: Alert.red, critical: true), "icon-critical.png")
+    write(StatusIcon.image(used: 1, alert: Alert.red, critical: true, exhausted: true), "icon-exhausted.png")
   }
   exit(0)
 }
@@ -347,7 +349,13 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
     let about = ImageRenderer(content: AboutView(updater: Updater()).background(Color(white: 0.96)))
     about.scale = 2
     write(about.nsImage, "about.png")
-    let icon = StatusIcon.image(used: store.iconRemaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical)
+    let remaining = store.iconRemaining
+    let icon = StatusIcon.image(
+      used: remaining.map { 1 - $0 },
+      alert: store.alertColor,
+      critical: store.alertLevel == .critical,
+      exhausted: remaining.map { Alert.percentLeft($0) == 0 } ?? false
+    )
     let big = NSImage(size: NSSize(width: 72, height: 72), flipped: false) { rect in
       icon.draw(in: rect); return true
     }
