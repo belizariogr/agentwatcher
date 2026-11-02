@@ -54,6 +54,53 @@ final class AlertTests: XCTestCase {
     XCTAssertEqual(Alert.percentUsedText(0), "100%")
   }
 
+  func testFullReadingThatMayBeRoundedIsNotExhausted() {
+    let rounded = UsageLimit(title: "Weekly", used: 1, resetsAt: nil, fullIsExact: false)
+    XCTAssertFalse(rounded.isExhausted())
+    XCTAssertEqual(rounded.percentLeftText(), "<1%")
+    XCTAssertEqual(rounded.percentUsedText(), ">99%")
+
+    let roundedNearFull = UsageLimit(title: "Weekly", used: 0.99, resetsAt: nil, fullIsExact: false)
+    XCTAssertEqual(roundedNearFull.percentLeftText(), "1%")
+    XCTAssertEqual(roundedNearFull.percentUsedText(), "99%")
+
+    let exact = UsageLimit(title: "Monthly", used: 1, resetsAt: nil)
+    XCTAssertTrue(exact.isExhausted())
+    XCTAssertEqual(exact.percentLeftText(), "0%")
+    XCTAssertEqual(exact.percentUsedText(), "100%")
+  }
+
+  func testClaudeFullReadingIsNotExhaustedButOthersStillAre() throws {
+    let payload: JSON = [
+      "seven_day": ["utilization": 100.0],
+      "limits": [["kind": "weekly_scoped", "percent": 100.0, "scope": ["model": ["display_name": "Fable"]]]],
+    ]
+    let limits = ClaudeProvider.parseLimits(payload)
+    XCTAssertEqual(limits.count, 2)
+    XCTAssertTrue(limits.allSatisfy { !$0.isExhausted() })
+
+    let claude = ProviderUsage(id: "claude", name: "Claude Code", limits: limits)
+    XCTAssertFalse(claude.isExhausted())
+    XCTAssertEqual(claude.tooltipLine(), "Claude Code: <1% left (Weekly)")
+
+    let modelOnly = ProviderUsage(id: "other", name: "Other", limits: [
+      UsageLimit(title: "Model", used: 1, resetsAt: nil, countsTowardAlert: false),
+    ])
+    XCTAssertFalse(modelOnly.isExhausted())
+
+    let cursor = ProviderUsage(id: "cursor", name: "Cursor", limits: [UsageLimit(title: "Overall", used: 1, resetsAt: nil)])
+    XCTAssertTrue(cursor.isExhausted())
+  }
+
+  func testRoundedFullFlagSurvivesCoding() throws {
+    let limit = UsageLimit(title: "Weekly", used: 1, resetsAt: nil, fullIsExact: false)
+    let decoded = try JSONDecoder().decode(UsageLimit.self, from: JSONEncoder().encode(limit))
+    XCTAssertFalse(decoded.fullIsExact)
+
+    let old = try JSONDecoder().decode(UsageLimit.self, from: Data(#"{"title":"Weekly","used":1}"#.utf8))
+    XCTAssertTrue(old.fullIsExact)
+  }
+
   func testExhaustedOnlyWhenNothingIsLeftAtTheShownPrecision() {
     XCTAssertTrue(Alert.isExhausted(0))
     XCTAssertTrue(Alert.isExhausted(0.00004))

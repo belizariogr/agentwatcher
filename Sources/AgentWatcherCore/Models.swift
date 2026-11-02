@@ -15,16 +15,21 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
   /// Cursor's Overall figure drives the icon but is not a third quota, so it
   /// stays off the panel when the two pools are listed.
   public let shownInPanel: Bool
+  /// Whether a reading of 100% used really means nothing is left. Anthropic
+  /// reports whole percents, so its 100 can still have room: Claude Code keeps
+  /// working there.
+  public let fullIsExact: Bool
 
-  public init(title: String, used: Double, resetsAt: Date?, countsTowardAlert: Bool = true, shownInPanel: Bool = true) {
+  public init(title: String, used: Double, resetsAt: Date?, countsTowardAlert: Bool = true, shownInPanel: Bool = true, fullIsExact: Bool = true) {
     self.title = title
     self.used = min(1, max(0, used))
     self.resetsAt = resetsAt
     self.countsTowardAlert = countsTowardAlert
     self.shownInPanel = shownInPanel
+    self.fullIsExact = fullIsExact
   }
 
-  enum CodingKeys: String, CodingKey { case title, used, resetsAt, countsTowardAlert, shownInPanel }
+  enum CodingKeys: String, CodingKey { case title, used, resetsAt, countsTowardAlert, shownInPanel, fullIsExact }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -33,6 +38,7 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
     resetsAt = try c.decodeIfPresent(Date.self, forKey: .resetsAt)
     countsTowardAlert = try c.decodeIfPresent(Bool.self, forKey: .countsTowardAlert) ?? true
     shownInPanel = try c.decodeIfPresent(Bool.self, forKey: .shownInPanel) ?? (title != "Overall")
+    fullIsExact = try c.decodeIfPresent(Bool.self, forKey: .fullIsExact) ?? true
   }
 
   /// A window whose reset time has passed is empty again, even if the last
@@ -44,6 +50,23 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
 
   public func remaining(now: Date = Date()) -> Double {
     1 - effectiveUsed(now: now)
+  }
+
+  /// Known to have nothing left, not just a reading that rounds to it.
+  public func isExhausted(now: Date = Date()) -> Bool {
+    fullIsExact && Alert.isExhausted(remaining(now: now))
+  }
+
+  /// "<1%" when the reading rounds to nothing but may still have room.
+  public func percentLeftText(now: Date = Date()) -> String {
+    let left = remaining(now: now)
+    return !fullIsExact && Alert.isExhausted(left) ? "<1%" : Alert.percentLeftText(left)
+  }
+
+  /// The complement of `percentLeftText`.
+  public func percentUsedText(now: Date = Date()) -> String {
+    let left = remaining(now: now)
+    return !fullIsExact && Alert.isExhausted(left) ? ">99%" : Alert.percentUsedText(left)
   }
 }
 
@@ -105,11 +128,16 @@ public struct ProviderUsage: Identifiable, Equatable, Sendable, Codable {
     limits.filter(\.countsTowardAlert).min { $0.remaining(now: now) < $1.remaining(now: now) }
   }
 
+  /// An account-level window is known to be used up.
+  public func isExhausted(now: Date = Date()) -> Bool {
+    limits.contains { $0.countsTowardAlert && $0.isExhausted(now: now) }
+  }
+
   /// Icon tooltip. Cursor's Overall is omitted from the label because it is
   /// not a row in the panel.
   public func tooltipLine(now: Date = Date()) -> String {
     guard let tight = tightest(now: now) else { return "\(name): no data" }
-    let percent = "\(Alert.percentLeftText(tight.remaining(now: now))) left"
+    let percent = "\(tight.percentLeftText(now: now)) left"
     return tight.shownInPanel ? "\(name): \(percent) (\(tight.title))" : "\(name): \(percent)"
   }
 
