@@ -57,16 +57,13 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
     fullIsExact && Alert.isExhausted(remaining(now: now))
   }
 
-  /// "<1%" when the reading rounds to nothing but may still have room.
   public func percentLeftText(now: Date = Date()) -> String {
-    let left = remaining(now: now)
-    return !fullIsExact && Alert.isExhausted(left) ? "<1%" : Alert.percentLeftText(left)
+    Alert.percentLeftText(remaining(now: now))
   }
 
   /// The complement of `percentLeftText`.
   public func percentUsedText(now: Date = Date()) -> String {
-    let left = remaining(now: now)
-    return !fullIsExact && Alert.isExhausted(left) ? ">99%" : Alert.percentUsedText(left)
+    Alert.percentUsedText(remaining(now: now))
   }
 }
 
