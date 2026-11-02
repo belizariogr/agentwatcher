@@ -235,6 +235,14 @@ public final class UsageStore: ObservableObject {
     return worstRemaining
   }
 
+  /// Whether the tray icon shows the allowance as gone.
+  public var iconExhausted: Bool {
+    if let id = pinnedProviderID, let usage = usages.first(where: { $0.id == id }) {
+      return usage.isExhausted()
+    }
+    return usages.contains { $0.isExhausted() }
+  }
+
   public var alertLevel: AlertLevel? {
     iconRemaining.flatMap { alertLevel(remaining: $0) }
   }

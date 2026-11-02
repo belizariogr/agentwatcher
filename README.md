@@ -17,7 +17,9 @@ in Swift/SwiftUI.
   left, the icon leaves the system color and turns **orange**, getting redder
   as it nears **10%**. At **10% or less** the sparkle in the middle becomes a
   bang. At **0%** the bang becomes an X. Both thresholds are configurable. Under
-  **2%** left, the percentages show two decimals (`1.37% left`).
+  **2%** left, the percentages show two decimals (`1.37% left`). Claude's usage
+  endpoint reports whole percents and Claude Code keeps working at its 100, so
+  that reading shows `<1% left` and keeps the bang instead of the X.
 
 ## Install
 

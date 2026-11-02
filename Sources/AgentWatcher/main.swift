@@ -92,8 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   private func updateIcon() {
     guard let button = statusItem.button else { return }
     let remaining = store.iconRemaining
-    let exhausted = remaining.map(Alert.isExhausted) ?? false
-    button.image = StatusIcon.image(used: remaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical, exhausted: exhausted)
+    button.image = StatusIcon.image(used: remaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical, exhausted: store.iconExhausted)
     button.toolTip = tooltip()
   }
 
@@ -293,7 +292,7 @@ if CommandLine.arguments.contains("--dump") {
       let usage = await provider.fetch()
       print("\(usage.name) [\(usage.plan ?? "-")]\(usage.message.map { " ! \($0)" } ?? "")")
       for limit in usage.limits {
-        print("  \(limit.title): \(Alert.percentLeftText(1 - limit.used)) left, resets \(limit.resetsAt.map { "\($0)" } ?? "-")")
+        print("  \(limit.title): \(limit.percentLeftText()) left, resets \(limit.resetsAt.map { "\($0)" } ?? "-")")
       }
     }
     done.signal()
@@ -354,7 +353,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
       used: remaining.map { 1 - $0 },
       alert: store.alertColor,
       critical: store.alertLevel == .critical,
-      exhausted: remaining.map(Alert.isExhausted) ?? false
+      exhausted: store.iconExhausted
     )
     let big = NSImage(size: NSSize(width: 72, height: 72), flipped: false) { rect in
       icon.draw(in: rect); return true

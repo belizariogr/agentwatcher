@@ -148,7 +148,7 @@ public struct ClaudeProvider: UsageProvider {
     var limits: [UsageLimit] = []
     func add(_ key: String, _ title: String) {
       guard let bucket = payload.object(key), let pct = bucket.number("utilization"), pct >= 0 else { return }
-      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(bucket["resets_at"])))
+      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(bucket["resets_at"]), fullIsExact: false))
     }
     add("five_hour", "Session (5h)")
     add("seven_day", "Weekly")
@@ -183,7 +183,8 @@ public struct ClaudeProvider: UsageProvider {
         title: title,
         used: pct / 100,
         resetsAt: Dates.parse(entry["resets_at"]),
-        countsTowardAlert: countsTowardAlert
+        countsTowardAlert: countsTowardAlert,
+        fullIsExact: false
       ))
     }
     return limits

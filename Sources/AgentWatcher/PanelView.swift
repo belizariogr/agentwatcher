@@ -238,13 +238,13 @@ struct LimitRow: View {
         HStack {
           Text(limit.title).font(.callout)
           Spacer()
-          Text("\(Alert.percentLeftText(1 - used)) left")
+          Text("\(limit.percentLeftText(now: context.date)) left")
             .font(.callout.monospacedDigit().weight(level == nil ? .regular : .semibold))
             .foregroundStyle(level == nil ? Color.primary : tint)
         }
         Meter(value: used, tint: tint)
         HStack {
-          Text("\(Alert.percentUsedText(1 - used)) used")
+          Text("\(limit.percentUsedText(now: context.date)) used")
           Spacer()
           if let resetsAt = limit.resetsAt, resetsAt > context.date {
             Text("Resets in \(Self.duration(resetsAt.timeIntervalSince(context.date)))")
