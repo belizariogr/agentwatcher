@@ -34,6 +34,35 @@ final class AlertTests: XCTestCase {
     XCTAssertEqual(Alert.percentLeft(-0.1), 0)
   }
 
+  func testPercentLabelsShowTwoDecimalsUnderTwoPercentLeft() {
+    XCTAssertEqual(Alert.percentLeftText(0.5), "50%")
+    XCTAssertEqual(Alert.percentLeftText(0.02), "2%")
+    XCTAssertEqual(Alert.percentLeftText(0.0299), "2%")
+    XCTAssertEqual(Alert.percentLeftText(0.01999), "1.99%")
+    XCTAssertEqual(Alert.percentLeftText(1 - 0.9863), "1.37%")
+    XCTAssertEqual(Alert.percentLeftText(0.01), "1.00%")
+    XCTAssertEqual(Alert.percentLeftText(0.0005), "0.05%")
+    XCTAssertEqual(Alert.percentLeftText(0), "0.00%")
+    XCTAssertEqual(Alert.percentLeftText(-0.1), "0.00%")
+
+    XCTAssertEqual(Alert.percentUsedText(0.5), "50%")
+    XCTAssertEqual(Alert.percentUsedText(0.0299), "98%")
+    XCTAssertEqual(Alert.percentUsedText(1 - 0.9863), "98.63%")
+    XCTAssertEqual(Alert.percentUsedText(0), "100.00%")
+  }
+
+  func testExhaustedOnlyWhenNothingIsLeftAtTheShownPrecision() {
+    XCTAssertTrue(Alert.isExhausted(0))
+    XCTAssertTrue(Alert.isExhausted(0.00004))
+    XCTAssertFalse(Alert.isExhausted(0.0001))
+    XCTAssertFalse(Alert.isExhausted(0.005))
+  }
+
+  func testTooltipShowsDecimalsUnderTwoPercentLeft() {
+    let limit = UsageLimit(title: "Weekly", used: 0.9863, resetsAt: nil)
+    XCTAssertEqual(ProviderUsage(id: "claude", name: "Claude Code", limits: [limit]).tooltipLine(), "Claude Code: 1.37% left (Weekly)")
+  }
+
   func testThresholdsMatchTheTruncatedPercentShown() {
     XCTAssertEqual(Alert.level(remaining: 0.109, warning: 0.2, critical: 0.1), .critical, "shown as 10% left")
     XCTAssertEqual(Alert.level(remaining: 0.11, warning: 0.2, critical: 0.1), .warning, "shown as 11% left")

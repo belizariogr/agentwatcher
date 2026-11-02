@@ -44,6 +44,33 @@ public enum Alert {
     min(max(Int((remaining * 100 + 1e-9).rounded(.down)), 0), 100)
   }
 
+  /// The label for what is left: whole percents, then two decimals under 2%
+  /// so the last stretch can be followed. Truncated like `percentLeft`.
+  public static func percentLeftText(_ remaining: Double) -> String {
+    let left = hundredthsLeft(remaining)
+    return left < 200 ? hundredthsText(left) : "\(percentLeft(remaining))%"
+  }
+
+  /// The label for what is used, the exact complement of `percentLeftText`.
+  public static func percentUsedText(_ remaining: Double) -> String {
+    let left = hundredthsLeft(remaining)
+    return left < 200 ? hundredthsText(10000 - left) : "\(100 - percentLeft(remaining))%"
+  }
+
+  /// Nothing left at the finest precision shown. 0.50% still has room.
+  public static func isExhausted(_ remaining: Double) -> Bool {
+    hundredthsLeft(remaining) == 0
+  }
+
+  /// Hundredths of a percent left, truncated. The epsilon matches `percentLeft`'s.
+  private static func hundredthsLeft(_ remaining: Double) -> Int {
+    min(max(Int((remaining * 10000 + 1e-7).rounded(.down)), 0), 10000)
+  }
+
+  private static func hundredthsText(_ value: Int) -> String {
+    String(format: "%d.%02d%%", value / 100, value % 100)
+  }
+
   /// Thresholds are whole percents already; this only absorbs float noise.
   static func wholePercent(_ fraction: Double) -> Int { Int((fraction * 100).rounded()) }
 
