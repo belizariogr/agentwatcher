@@ -16,7 +16,7 @@ in Swift/SwiftUI.
   the combined **Overall** usage. When any harness has **20% or less**
   left, the icon leaves the system color and turns **orange**, getting redder
   as it nears **10%**. At **10% or less** the sparkle in the middle becomes a
-  bang. Both thresholds are configurable.
+  bang. At **0%** the bang becomes an X. Both thresholds are configurable.
 
 ## Install
 

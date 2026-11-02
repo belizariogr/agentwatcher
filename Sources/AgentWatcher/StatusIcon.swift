@@ -6,27 +6,36 @@ import AppKit
 /// is a template image and follows the menu bar's own color; once a harness
 /// drops to the warning threshold it is drawn orange, reddening toward
 /// critical. At critical the sparkle is replaced by a bang in the same seat.
+/// When the allowance is gone, the bang becomes an X; the horseshoe stays.
 enum StatusIcon {
   static let size = NSSize(width: 18, height: 18)
   /// Lower-left of the horseshoe. Clockwise 270° over the top ends at 4:30.
   static let arcStart: CGFloat = 225
   static let arcSpan: CGFloat = 270
 
-  static func image(used: Double?, alert: RGB?, critical: Bool = false) -> NSImage {
+  static func image(used: Double?, alert: RGB?, critical: Bool = false, exhausted: Bool = false) -> NSImage {
     let color: NSColor = alert.map(nsColor) ?? .black
     let image = NSImage(size: size, flipped: false) { rect in
-      draw(in: rect, used: used, color: color, critical: critical)
+      draw(in: rect, used: used, color: color, critical: critical || exhausted, exhausted: exhausted)
       return true
     }
-    image.isTemplate = alert == nil && !critical
+    image.isTemplate = alert == nil && !critical && !exhausted
     return image
   }
 
-  static func draw(in rect: NSRect, used: Double?, color: NSColor, critical: Bool) {
+  static func draw(in rect: NSRect, used: Double?, color: NSColor, critical: Bool, exhausted: Bool) {
+    NSGraphicsContext.saveGraphicsState()
+    defer { NSGraphicsContext.restoreGraphicsState() }
+    let xform = NSAffineTransform()
+    xform.translateX(by: rect.minX, yBy: rect.minY)
+    xform.scaleX(by: rect.width / size.width, yBy: rect.height / size.height)
+    xform.concat()
+
+    let base = NSRect(origin: .zero, size: size)
     let lineWidth: CGFloat = 2.2
-    let center = NSPoint(x: rect.midX, y: rect.midY + 0.55)
+    let center = NSPoint(x: base.midX, y: base.midY + 0.55)
     let radius: CGFloat = 6.9
-    let arcColor = critical ? nsColor(Alert.red) : color
+    let arcColor = (critical || exhausted) ? nsColor(Alert.red) : color
 
     let track = horseshoe(center: center, radius: radius, fraction: 1)
     track.lineWidth = lineWidth
@@ -34,7 +43,7 @@ enum StatusIcon {
     arcColor.withAlphaComponent(0.3).setStroke()
     track.stroke()
 
-    let fillFraction: CGFloat = critical ? 1 : CGFloat(min(max(used ?? 0, 0), 1))
+    let fillFraction: CGFloat = (critical || exhausted) ? 1 : CGFloat(min(max(used ?? 0, 0), 1))
     if fillFraction > 0 {
       let arc = horseshoe(center: center, radius: radius, fraction: fillFraction)
       arc.lineWidth = lineWidth
@@ -43,7 +52,9 @@ enum StatusIcon {
       arc.stroke()
     }
 
-    if critical {
+    if exhausted {
+      xMark(center: center, color: arcColor)
+    } else if critical {
       bang(center: center, color: arcColor)
     } else {
       arcColor.setFill()
@@ -63,6 +74,24 @@ enum StatusIcon {
       clockwise: true
     )
     return path
+  }
+
+  /// X in the sparkle's seat when the allowance is gone.
+  static func xMark(center c: NSPoint, color: NSColor) {
+    let d: CGFloat = 2.65
+    let width: CGFloat = 1.85
+    color.setStroke()
+    for (a, b) in [
+      (NSPoint(x: c.x - d, y: c.y + d), NSPoint(x: c.x + d, y: c.y - d)),
+      (NSPoint(x: c.x - d, y: c.y - d), NSPoint(x: c.x + d, y: c.y + d)),
+    ] {
+      let path = NSBezierPath()
+      path.move(to: a)
+      path.line(to: b)
+      path.lineWidth = width
+      path.lineCapStyle = .round
+      path.stroke()
+    }
   }
 
   /// Exclamation occupying the sparkle's seat in the middle of the horseshoe.
