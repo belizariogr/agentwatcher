@@ -57,8 +57,8 @@ final class AlertTests: XCTestCase {
   func testFullReadingThatMayBeRoundedIsNotExhausted() {
     let rounded = UsageLimit(title: "Weekly", used: 1, resetsAt: nil, fullIsExact: false)
     XCTAssertFalse(rounded.isExhausted())
-    XCTAssertEqual(rounded.percentLeftText(), "<1%")
-    XCTAssertEqual(rounded.percentUsedText(), ">99%")
+    XCTAssertEqual(rounded.percentLeftText(), "0%")
+    XCTAssertEqual(rounded.percentUsedText(), "100%")
 
     let roundedNearFull = UsageLimit(title: "Weekly", used: 0.99, resetsAt: nil, fullIsExact: false)
     XCTAssertEqual(roundedNearFull.percentLeftText(), "1%")
@@ -81,7 +81,7 @@ final class AlertTests: XCTestCase {
 
     let claude = ProviderUsage(id: "claude", name: "Claude Code", limits: limits)
     XCTAssertFalse(claude.isExhausted())
-    XCTAssertEqual(claude.tooltipLine(), "Claude Code: <1% left (Weekly)")
+    XCTAssertEqual(claude.tooltipLine(), "Claude Code: 0% left (Weekly)")
 
     let modelOnly = ProviderUsage(id: "other", name: "Other", limits: [
       UsageLimit(title: "Model", used: 1, resetsAt: nil, countsTowardAlert: false),
@@ -262,7 +262,7 @@ final class ClaudeParsingTests: XCTestCase {
       windows: ["Weekly": Date().addingTimeInterval(-60)]
     )
     XCTAssertFalse(limits[0].isExhausted())
-    XCTAssertEqual(limits[0].percentLeftText(), "<1%")
+    XCTAssertEqual(limits[0].percentLeftText(), "0%")
     XCTAssertFalse(ProviderUsage(id: "claude", name: "Claude Code", limits: limits).isExhausted())
   }
 
