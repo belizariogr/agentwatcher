@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the Agent Watcher app icon (a sparkle inside a usage ring) as SVG.
+"""Draw the Agent Watcher app icon (an agent robot head inside a usage ring) as SVG.
 
   scripts/app_icon.py <palette> <out.svg> [background]
   scripts/app_icon.py --list
@@ -7,7 +7,7 @@
 import math, sys
 
 PALETTES = {
-  # name: (gradient stops for sparkle and ring, background center, background edge)
+  # name: (gradient stops for the glyph and ring, background center, background edge)
   "ocean": (("#22d3ee", "#3b82f6", "#6366f1"), "#13254a", "#03060e"),
   "aurora": (("#bef264", "#2dd4bf", "#06b6d4"), "#0f2e2e", "#020909"),
   "lilac":  (("#f5d0fe", "#c084fc", "#6366f1"), "#2a1846", "#07040e"),
@@ -34,11 +34,15 @@ def arc(cx, cy, r, a0, a1):
   large = 1 if (a1 - a0) % 360 > 180 else 0
   return f"M{x0:.2f} {y0:.2f} A{r} {r} 0 {large} 1 {x1:.2f} {y1:.2f}"
 
-def sparkle(cx, cy, s, fill):
-  k = s * 0.22
-  return (f'<path fill="{fill}" d="M{cx} {cy-s} C{cx+k*0.6} {cy-k} {cx+k} {cy-k*0.6} {cx+s} {cy} '
-          f'C{cx+k} {cy+k*0.6} {cx+k*0.6} {cy+k} {cx} {cy+s} C{cx-k*0.6} {cy+k} {cx-k} {cy+k*0.6} {cx-s} {cy} '
-          f'C{cx-k} {cy-k*0.6} {cx-k*0.6} {cy-k} {cx} {cy-s}Z"/>')
+def agent(cx, cy, s, paint):
+  """A robot head: rounded face, antenna and two eyes (same shape as the menu bar's)."""
+  u = lambda v: f"{v * s:.1f}"
+  return (f'<rect x="{cx - .82 * s:.1f}" y="{cy - .55 * s:.1f}" width="{u(1.64)}" height="{u(1.25)}" rx="{u(.36)}" '
+          f'fill="none" stroke="{paint}" stroke-width="{u(.205)}"/>'
+          f'<line x1="{cx}" y1="{cy - .55 * s:.1f}" x2="{cx}" y2="{cy - .88 * s:.1f}" stroke="{paint}" stroke-width="{u(.18)}" stroke-linecap="round"/>'
+          f'<circle cx="{cx}" cy="{cy - .98 * s:.1f}" r="{u(.13)}" fill="{paint}"/>'
+          f'<circle cx="{cx - .34 * s:.1f}" cy="{cy + .08 * s:.1f}" r="{u(.17)}" fill="{paint}"/>'
+          f'<circle cx="{cx + .34 * s:.1f}" cy="{cy + .08 * s:.1f}" r="{u(.17)}" fill="{paint}"/>')
 
 def svg(palette, background="dark"):
   (c0, c1, c2), tint0, tint1 = PALETTES[palette]
@@ -53,14 +57,14 @@ def svg(palette, background="dark"):
 <defs>
 <radialGradient id="bg" cx=".5" cy=".3" r=".85"><stop offset="0" stop-color="{bg0}"/><stop offset="1" stop-color="{bg1}"/></radialGradient>
 <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#fff" stop-opacity="{shine}"/><stop offset=".45" stop-color="#fff" stop-opacity="0"/></linearGradient>
-<linearGradient id="sp" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="{c0}"/><stop offset=".5" stop-color="{c1}"/><stop offset="1" stop-color="{c2}"/></linearGradient>
+<linearGradient id="sp" gradientUnits="userSpaceOnUse" x1="222" y1="222" x2="802" y2="802"><stop offset="0" stop-color="{c0}"/><stop offset=".5" stop-color="{c1}"/><stop offset="1" stop-color="{c2}"/></linearGradient>
 <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%"><feDropShadow dx="0" dy="14" stdDeviation="18" flood-opacity=".35"/></filter>
 <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="22" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
 </defs>
 <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)" filter="url(#shadow)"/>
 <circle cx="512" cy="512" r="290" fill="none" stroke="{track}" stroke-opacity="{track_op}" stroke-width="22"/>
 <path d="{arc(512, 512, 290, 0, 250)}" fill="none" stroke="url(#sp)" stroke-width="22" stroke-linecap="round" filter="url(#glow)"/>
-<g filter="url(#glow)">{sparkle(512, 512, 210, "url(#sp)")}</g>
+<g filter="url(#glow)">{agent(512, 512, 180, "url(#sp)")}</g>
 <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#shine)"/>
 </svg>
 '''
