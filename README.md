@@ -10,12 +10,12 @@ in Swift/SwiftUI.
   each window is left (5h session, weekly, per-model limits) and when it
   resets.
 - **Right click**: Refresh / Settings… / Check for Updates… / About / Quit.
-- The icon is a **270° horseshoe** with a sparkle in the middle; the arc fills
+- The icon is a **270° horseshoe** with an agent (robot head) in the middle; the arc fills
   with the tightest account-level window across all harnesses. Model-scoped
   allowances (Fable) and Cursor's Auto/API pools do not color it; Cursor uses
   the combined **Overall** usage. When any harness has **20% or less**
   left, the icon leaves the system color and turns **orange**, getting redder
-  as it nears **10%**. At **10% or less** the sparkle in the middle becomes a
+  as it nears **10%**. At **10% or less** the agent in the middle becomes a
   bang. At **0%** the bang becomes an X. Both thresholds are configurable. Under
   **2%** left, the percentages show two decimals (`1.37% left`). Claude's usage
   endpoint can read 100 while requests still succeed, and it never says when
