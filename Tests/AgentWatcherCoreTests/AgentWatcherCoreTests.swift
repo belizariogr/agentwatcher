@@ -204,7 +204,9 @@ final class ClaudeParsingTests: XCTestCase {
     XCTAssertTrue(limits[0].countsTowardAlert)
     XCTAssertEqual(limits[1].used, 0.05, accuracy: 1e-9)
     XCTAssertFalse(limits[1].countsTowardAlert)
-    XCTAssertEqual(ProviderUsage(id: "claude", name: "Claude Code", limits: limits).tooltipLine(), "Claude Code: 7% left (Weekly)")
+    // Read before the payload's reset, or the window counts as renewed.
+    let beforeReset = ISO8601DateFormatter().date(from: "2026-11-01T00:00:00Z")!
+    XCTAssertEqual(ProviderUsage(id: "claude", name: "Claude Code", limits: limits).tooltipLine(now: beforeReset), "Claude Code: 7% left (Weekly)")
   }
 
   func testFillsWeeklyFromUnscopedLimitsWhenTopLevelBucketIsMissing() {
@@ -406,8 +408,10 @@ final class CursorParsingTests: XCTestCase {
     XCTAssertEqual(limits[0].resetsAt, Date(timeIntervalSince1970: 1794660445))
     let usage = ProviderUsage(id: "cursor", name: "Cursor", limits: limits)
     XCTAssertEqual(usage.visibleLimits.map(\.title), ["Cursor Models", "Other Models"])
-    XCTAssertEqual(usage.tightest()?.title, "Overall")
-    XCTAssertEqual(usage.tooltipLine(), "Cursor: 12% left")
+    // Read inside the billing cycle, or the pools count as renewed.
+    let inCycle = Date(timeIntervalSince1970: 1794000000)
+    XCTAssertEqual(usage.tightest(now: inCycle)?.title, "Overall")
+    XCTAssertEqual(usage.tooltipLine(now: inCycle), "Cursor: 12% left")
   }
 
   func testPoolsCountTowardAlertWhenOverallIsMissing() {
