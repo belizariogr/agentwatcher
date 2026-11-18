@@ -9,16 +9,20 @@ in Swift/SwiftUI.
 - **Left click** the icon: a panel with each harness, its plan, how much of
   each window is left (5h session, weekly, per-model limits) and when it
   resets.
-- Each bar shows what is **left** and shrinks as the window is used, turning
-  orange, then red, near zero. A **pace marker** shows how much an even spread
-  until the reset would leave by now: a bar short of it is spending faster
-  (`3% in deficit · runs out in 4d 10h`), a bar past it has room saved
-  (`22% in reserve`). Weekly bars are split into their days. In Settings,
-  **Skip Saturdays** and **Skip Sundays** leave those days out of the pace of
-  weekly and monthly windows, so the marker stands still over the weekend.
+- Each bar shows what is **left** in the harness' color and shrinks as the
+  window is used, over a hatched track, turning orange, then red, near zero.
+  The time to the reset sits inside its right end. A **pace marker** shows
+  how much an even spread until the reset would leave by now: a bar short of
+  it is spending faster (`3% in deficit · runs out in 4d 10h`), a bar past it
+  has room saved (`22% in reserve`). Weekly bars are split into their days.
+  In Settings › Limits, **Leave out Saturdays / Sundays** takes those days out
+  of the pace of weekly and monthly windows, so the marker stands still over
+  the weekend.
+- **Settings** has three toolbar tabs, laid out like Safari's: General
+  (refresh, login, harnesses), Limits (alert thresholds, pace) and Updates.
 - **Right click**: Refresh / Settings… / Check for Updates… / About / Quit.
-- The icon is a **270° horseshoe** with an agent (robot head) in the middle; the arc fills
-  with the tightest account-level window across all harnesses. Model-scoped
+- The icon is a **270° horseshoe** with an agent (robot head) in the middle; the arc holds
+  what is left of the tightest account-level window across all harnesses. Model-scoped
   allowances (Fable) and Cursor's Auto/API pools do not color it; Cursor uses
   the combined **Overall** usage. When any harness has **20% or less**
   left, the icon leaves the system color and turns **orange**, getting redder
@@ -203,6 +207,8 @@ defaults write com.belizariogr.agentwatcher hiddenProviders -array codex
 swift build
 .build/debug/AgentWatcher --dump              # prints the limits and exits
 .build/debug/AgentWatcher --snapshot /tmp/aw  # renders the panel and icon to PNG
+.build/debug/AgentWatcher --panel-snapshot /tmp/aw     # opens the real panel, screenshots it with its backdrop
+.build/debug/AgentWatcher --settings-snapshot /tmp/aw  # screenshots each settings tab
 ```
 
 ## Adding a harness
