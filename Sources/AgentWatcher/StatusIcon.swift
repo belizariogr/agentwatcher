@@ -1,7 +1,9 @@
 import AgentWatcherCore
 import AppKit
 
-/// The menu bar glyph: an agent (robot head) inside a 270° horseshoe gauge. The open gap sits at 6 o'clock. While there is room it
+/// The menu bar glyph: an agent (robot head) inside a 270° horseshoe gauge
+/// that holds what is left and empties as it is used, like the panel's bars.
+/// The open gap sits at 6 o'clock. While there is room it
 /// is a template image and follows the menu bar's own color; once a harness
 /// drops to the warning threshold it is drawn orange, reddening toward
 /// critical. At critical the agent is replaced by a bang in the same seat.
@@ -12,17 +14,17 @@ enum StatusIcon {
   static let arcStart: CGFloat = 225
   static let arcSpan: CGFloat = 270
 
-  static func image(used: Double?, alert: RGB?, critical: Bool = false, exhausted: Bool = false) -> NSImage {
+  static func image(remaining: Double?, alert: RGB?, critical: Bool = false, exhausted: Bool = false) -> NSImage {
     let color: NSColor = alert.map(nsColor) ?? .black
     let image = NSImage(size: size, flipped: false) { rect in
-      draw(in: rect, used: used, color: color, critical: critical || exhausted, exhausted: exhausted)
+      draw(in: rect, remaining: remaining, color: color, critical: critical || exhausted, exhausted: exhausted)
       return true
     }
     image.isTemplate = alert == nil && !critical && !exhausted
     return image
   }
 
-  static func draw(in rect: NSRect, used: Double?, color: NSColor, critical: Bool, exhausted: Bool) {
+  static func draw(in rect: NSRect, remaining: Double?, color: NSColor, critical: Bool, exhausted: Bool) {
     NSGraphicsContext.saveGraphicsState()
     defer { NSGraphicsContext.restoreGraphicsState() }
     let xform = NSAffineTransform()
@@ -42,7 +44,7 @@ enum StatusIcon {
     arcColor.withAlphaComponent(0.3).setStroke()
     track.stroke()
 
-    let fillFraction: CGFloat = (critical || exhausted) ? 1 : CGFloat(min(max(used ?? 0, 0), 1))
+    let fillFraction: CGFloat = exhausted ? 0 : CGFloat(min(max(remaining ?? 0, 0), 1))
     if fillFraction > 0 {
       let arc = horseshoe(center: center, radius: radius, fraction: fillFraction)
       arc.lineWidth = lineWidth

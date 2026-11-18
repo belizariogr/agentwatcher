@@ -16,6 +16,17 @@ enum Logos {
 <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><path fill="#000" fill-opacity=".55" d="M11.925 24l10.425-6-10.425-6L1.5 18z"/><path fill="#000" fill-opacity=".75" d="M22.35 18V6L11.925 0v12z"/><path fill="#000" fill-opacity=".35" d="M11.925 0L1.5 6v12l10.425-6z"/><path fill="#000" fill-opacity=".85" d="M22.35 6L11.925 24V12z"/><path fill="#000" d="M22.35 6l-10.425 6L1.5 6z"/></svg>
 """#
 
+  /// Each harness' color for its bars: Claude's terracotta, a Codex blue,
+  /// and Cursor's graphite.
+  static func brandColor(for providerId: String) -> NSColor {
+    switch providerId {
+    case "claude": NSColor(srgbRed: 0xD9 / 255, green: 0x77 / 255, blue: 0x57 / 255, alpha: 1)
+    case "codex": NSColor(srgbRed: 0x4C / 255, green: 0x6F / 255, blue: 0xFF / 255, alpha: 1)
+    case "cursor": NSColor(srgbRed: 0x9A / 255, green: 0xA0 / 255, blue: 0xA6 / 255, alpha: 1)
+    default: .controlAccentColor
+    }
+  }
+
   static func image(for providerId: String) -> NSImage? {
     let svg: String
     switch providerId {

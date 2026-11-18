@@ -20,15 +20,17 @@ struct PanelView: View {
           .multilineTextAlignment(.center)
           .padding(.vertical, 24)
       } else {
-        ForEach(store.usages) { usage in
-          ProviderCard(
-            usage: usage,
-            warning: store.warningThreshold,
-            critical: store.criticalThreshold,
-            pace: store.showPace ? store.paceOptions : nil,
-            selected: store.pinnedProviderID == usage.id,
-            onSelect: { store.togglePinnedProvider(usage.id) }
-          )
+        VStack(spacing: 12) {
+          ForEach(store.usages) { usage in
+            ProviderCard(
+              usage: usage,
+              warning: store.warningThreshold,
+              critical: store.criticalThreshold,
+              pace: store.showPace ? store.paceOptions : nil,
+              selected: store.pinnedProviderID == usage.id,
+              onSelect: { store.togglePinnedProvider(usage.id) }
+            )
+          }
         }
       }
 
@@ -57,11 +59,12 @@ struct PanelView: View {
           } label: {
             Image(systemName: "arrow.clockwise")
           }
-          .buttonStyle(.borderless)
+          .buttonStyle(.bordered)
+          .buttonBorderShape(.circle)
           .help("Refresh now")
         }
       }
-      .frame(width: 18, height: 18)
+      .frame(width: hasLiquidGlass ? 30 : 18, height: hasLiquidGlass ? 30 : 18)
     }
   }
 
@@ -73,9 +76,9 @@ struct PanelView: View {
         Text("Version \(release.version.description) is available").font(.callout)
         Spacer()
         if updater.notInstallableReason == nil {
-          Button("Install") { updater.install(release) }.controlSize(.small)
+          Button("Install") { updater.install(release) }.controlSize(.small).buttonStyle(.borderedProminent)
         } else {
-          Button("Download") { NSWorkspace.shared.open(release.pageURL) }.controlSize(.small)
+          Button("Download") { NSWorkspace.shared.open(release.pageURL) }.controlSize(.small).buttonStyle(.bordered)
         }
       }
     case .installing(let release):
@@ -95,17 +98,17 @@ struct PanelView: View {
       } label: {
         Label("Settings", systemImage: "gearshape")
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.bordered)
       .keyboardShortcut(",")
       Button {
         onOpenAbout()
       } label: {
         Label("About", systemImage: "info.circle")
       }
-      .buttonStyle(.borderless)
+      .buttonStyle(.bordered)
       Spacer()
       Button("Quit", action: onQuit)
-        .buttonStyle(.borderless)
+        .buttonStyle(.bordered)
         .keyboardShortcut("q")
     }
     .font(.callout)
@@ -171,12 +174,14 @@ struct ProviderCard: View {
       }
 
       ForEach(usage.visibleLimits) { limit in
-        LimitRow(limit: limit, warning: warning, critical: critical, pace: pace)
+        LimitRow(limit: limit, warning: warning, critical: critical, pace: pace, brand: Logos.brandColor(for: usage.id))
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(10)
-    .background(.background.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+    .background(.background.opacity(0.5), in: Self.shape)
+    // The whole card takes the click, not only what is drawn in it.
+    .contentShape(Self.shape)
     .overlay(alignment: .topTrailing) {
       if selected {
         Image(systemName: "checkmark.circle.fill")
@@ -186,11 +191,12 @@ struct ProviderCard: View {
           .accessibilityHidden(true)
       }
     }
-    .overlay(
-      RoundedRectangle(cornerRadius: 8)
-        .strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
-    )
+    .overlay {
+      Self.shape.strokeBorder(selected ? Color.accentColor : Color(nsColor: .separatorColor), lineWidth: selected ? 2 : 1)
+    }
   }
+
+  static let shape = RoundedRectangle(cornerRadius: 8)
 
 }
 
@@ -230,44 +236,59 @@ struct LimitRow: View {
   let warning: Double
   let critical: Double
   var pace: PaceOptions? = PaceOptions()
+  /// The harness' own color, toned down for the fill. Orange and red take
+  /// over near the end.
+  var brand: NSColor = .controlAccentColor
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 60)) { context in
       let now = context.date
       let remaining = limit.remaining(now: now)
       let level = Alert.level(remaining: remaining, warning: warning, critical: critical)
-      let tint = Alert.color(remaining: remaining, warning: warning, critical: critical)
-        .map { Color(StatusIcon.nsColor($0)) } ?? Color.accentColor
+      let alert = Alert.color(remaining: remaining, warning: warning, critical: critical).map { Color(StatusIcon.nsColor($0)) }
       let reading = pace.flatMap { limit.pace(now: now, options: $0) }
+      let resetsIn = limit.resetsAt.flatMap { $0 > now ? Self.duration($0.timeIntervalSince(now)) : nil }
 
-      VStack(alignment: .leading, spacing: 4) {
+      VStack(alignment: .leading, spacing: 5) {
         HStack {
           Text(limit.title).font(.callout)
           Spacer()
           Text("\(limit.percentLeftText(now: now)) left")
             .font(.callout.monospacedDigit().weight(level == nil ? .regular : .semibold))
-            .foregroundStyle(level == nil ? Color.primary : tint)
+            .foregroundStyle(alert ?? Color.primary)
         }
-        Meter(value: remaining, tint: tint, marker: reading?.expectedRemaining, dayMarks: reading?.dayMarks ?? [])
+        Meter(
+          value: remaining,
+          tint: alert ?? Color(nsColor: Self.muted(brand)),
+          marker: reading?.expectedRemaining,
+          dayMarks: reading?.dayMarks ?? [],
+          badge: resetsIn
+        )
         HStack(spacing: 4) {
           if let reading {
             Text(reading.label)
-              .foregroundStyle(reading.deltaPercent > 0 && reading.delta > 0 ? Color.orange : Color.secondary)
+              .foregroundStyle(reading.deltaPercent > 0 && reading.delta > 0 ? (alert ?? Color.orange) : Color.secondary)
             if let runsOut = reading.runsOutAt {
               Text("· runs out in \(Self.duration(runsOut.timeIntervalSince(now)))")
             }
           } else {
             Text("\(limit.percentUsedText(now: now)) used")
           }
-          Spacer()
-          if let resetsAt = limit.resetsAt, resetsAt > now {
-            Text("Resets in \(Self.duration(resetsAt.timeIntervalSince(now)))")
-          }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
         .lineLimit(1)
       }
+    }
+  }
+
+  /// The brand color pulled toward the window background, so a full bar
+  /// reads as calm and the alert colors stand out.
+  static func muted(_ color: NSColor) -> NSColor {
+    NSColor(name: nil) { appearance in
+      let dark = appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+      let base = dark ? NSColor(white: 0.12, alpha: 1) : NSColor(white: 1, alpha: 1)
+      return color.usingColorSpace(.sRGB)?.blended(withFraction: dark ? 0.42 : 0.25, of: base) ?? color
     }
   }
 
@@ -280,43 +301,84 @@ struct LimitRow: View {
   }
 }
 
-/// What is left of an allowance: the fill shrinks toward zero as it is used.
-/// `marker` is where an even spread until the reset would be by now; fill
-/// short of it means spending faster than the pace. `dayMarks` split the bar
-/// into the window's days.
+/// What is left of an allowance: the fill shrinks toward zero as it is used,
+/// over a hatched track for the part already spent. `marker` is where an
+/// even spread until the reset would be by now; fill short of it means
+/// spending faster than the pace. `dayMarks` split weekly bars into days, and
+/// `badge` (time to the reset) sits inside the right end.
 struct Meter: View {
   let value: Double
   let tint: Color
   var marker: Double? = nil
   var dayMarks: [Double] = []
+  var badge: String? = nil
+
+  private let height: CGFloat = 16
+  private let corner: CGFloat = 5
 
   var body: some View {
     GeometryReader { geo in
       let width = geo.size.width
+      let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
       ZStack(alignment: .leading) {
-        Capsule().fill(.quaternary)
-        Capsule().fill(tint).frame(width: max(0, width * min(max(value, 0), 1)))
+        shape.fill(.quaternary.opacity(0.6))
+        Hatch().stroke(Color.primary.opacity(0.13), lineWidth: 1.5)
+        shape.fill(tint).frame(width: max(0, width * min(max(value, 0), 1)))
         ForEach(dayMarks, id: \.self) { mark in
           Rectangle()
-            .fill(Color(nsColor: .windowBackgroundColor).opacity(0.7))
+            .fill(Color(nsColor: .windowBackgroundColor).opacity(0.35))
             .frame(width: 1)
             .offset(x: width * mark - 0.5)
         }
       }
-      .clipShape(Capsule())
+      .clipShape(shape)
       .overlay(alignment: .leading) {
         if let marker {
           // Pulled in at the ends so the line stays visible on the rounded caps.
+          // Under the badge: only its ends above and below the bar show there.
           RoundedRectangle(cornerRadius: 1)
             .fill(Color.primary)
-            .frame(width: 2, height: geo.size.height + 6)
+            .frame(width: 2, height: height + 6)
             .offset(x: min(max(width * marker - 1, 1), width - 3))
+            .accessibilityHidden(true)
+        }
+      }
+      .overlay(alignment: .trailing) {
+        if let badge {
+          HStack(spacing: 3) {
+            Image(systemName: "arrow.clockwise").font(.system(size: 8, weight: .semibold))
+            Text(badge).monospacedDigit()
+          }
+          .font(.system(size: 10, weight: .medium))
+          .foregroundStyle(.primary)
+          .padding(.horizontal, 5)
+          .frame(height: height - 4)
+          .glassSurface(in: RoundedRectangle(cornerRadius: corner - 2, style: .continuous), fallback: .background)
+          .padding(.trailing, 2)
+          .accessibilityLabel("Resets in \(badge)")
         }
       }
     }
-    .frame(height: 8)
+    .frame(height: height)
     .padding(.vertical, marker == nil ? 0 : 3)
-    .accessibilityElement()
+    .accessibilityElement(children: .combine)
     .accessibilityLabel("\(Int((value * 100).rounded()))% left")
   }
 }
+
+/// Diagonal stripes across the whole rect, for the spent part of a bar.
+struct Hatch: Shape {
+  var spacing: CGFloat = 5
+
+  func path(in rect: CGRect) -> Path {
+    var path = Path()
+    var x = rect.minX - rect.height
+    while x < rect.maxX {
+      path.move(to: CGPoint(x: x, y: rect.maxY))
+      path.addLine(to: CGPoint(x: x + rect.height, y: rect.minY))
+      x += spacing
+    }
+    return path
+  }
+}
+

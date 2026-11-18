@@ -92,7 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
   private func updateIcon() {
     guard let button = statusItem.button else { return }
     let remaining = store.iconRemaining
-    button.image = StatusIcon.image(used: remaining.map { 1 - $0 }, alert: store.alertColor, critical: store.alertLevel == .critical, exhausted: store.iconExhausted)
+    button.image = StatusIcon.image(remaining: remaining, alert: store.alertColor, critical: store.alertLevel == .critical, exhausted: store.iconExhausted)
     button.toolTip = tooltip()
   }
 
@@ -314,10 +314,10 @@ if let flag = CommandLine.arguments.firstIndex(of: "--icons") {
             let png = rep.representation(using: .png, properties: [:]) else { return }
       try? png.write(to: dir.appendingPathComponent(name))
     }
-    write(StatusIcon.image(used: 0.45, alert: nil), "icon-tray.png")
-    write(StatusIcon.image(used: 0.82, alert: Alert.orange), "icon-warning.png")
-    write(StatusIcon.image(used: 0.94, alert: Alert.red, critical: true), "icon-critical.png")
-    write(StatusIcon.image(used: 1, alert: Alert.red, critical: true, exhausted: true), "icon-exhausted.png")
+    write(StatusIcon.image(remaining: 0.55, alert: nil), "icon-tray.png")
+    write(StatusIcon.image(remaining: 0.18, alert: Alert.orange), "icon-warning.png")
+    write(StatusIcon.image(remaining: 0.06, alert: Alert.red, critical: true), "icon-critical.png")
+    write(StatusIcon.image(remaining: 0, alert: Alert.red, critical: true, exhausted: true), "icon-exhausted.png")
   }
   exit(0)
 }
@@ -350,7 +350,7 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
     write(about.nsImage, "about.png")
     let remaining = store.iconRemaining
     let icon = StatusIcon.image(
-      used: remaining.map { 1 - $0 },
+      remaining: remaining,
       alert: store.alertColor,
       critical: store.alertLevel == .critical,
       exhausted: store.iconExhausted
@@ -359,6 +359,105 @@ if let flag = CommandLine.arguments.firstIndex(of: "--snapshot") {
       icon.draw(in: rect); return true
     }
     write(big, "icon.png")
+  }
+  exit(0)
+}
+
+/// Screenshot of one of our own windows as the window server draws it, so
+/// Liquid Glass and vibrancy show (an offscreen render has neither).
+@MainActor func captureWindow(_ window: NSWindow?, to url: URL) {
+  guard let window else { return }
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+  process.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", url.path]
+  try? process.run()
+  process.waitUntilExit()
+}
+
+/// Screenshot of the screen area a window covers, with whatever is behind
+/// it. A capture of the window alone (`-l`) has no backdrop, so glass and
+/// blur come out as flat gray and cannot be judged.
+@MainActor func captureArea(of window: NSWindow?, to url: URL, margin: CGFloat = 24) {
+  guard let window, let screen = window.screen ?? NSScreen.main else { return }
+  let top = NSScreen.screens.first?.frame.maxY ?? screen.frame.maxY
+  let frame = window.frame.insetBy(dx: -margin, dy: -margin)
+  let rect = "\(Int(frame.minX)),\(Int(top - frame.maxY)),\(Int(frame.width)),\(Int(frame.height))"
+  let process = Process()
+  process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+  process.arguments = ["-x", "-R", rect, url.path]
+  try? process.run()
+  process.waitUntilExit()
+}
+
+@MainActor func settle(_ seconds: TimeInterval) {
+  RunLoop.main.run(until: Date().addingTimeInterval(seconds))
+}
+
+// `AgentWatcher --settings-snapshot <dir>` screenshots each settings tab.
+// `AgentWatcher --show-settings <tab> <file>` opens one tab for a few seconds
+// and writes its window number to <file>, for a capture taken from outside
+// (launched with `open`, the app may come to the front; a capture made by the
+// app itself would need its own screen-recording permission).
+if let flag = CommandLine.arguments.firstIndex(where: { $0 == "--settings-snapshot" || $0 == "--show-settings" }) {
+  let showOnly = CommandLine.arguments[flag] == "--show-settings"
+  let args = Array(CommandLine.arguments.dropFirst(flag + 1))
+  MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let settings = SettingsWindowController(store: UsageStore(cacheURL: nil), updater: Updater())
+    settings.show()
+    app.activate(ignoringOtherApps: true)
+    if showOnly {
+      settings.select(SettingsTab(rawValue: args.first ?? "") ?? .general)
+      let window = settings.makeWindow()
+      if args.count > 1 {
+        try? "\(window.windowNumber)".write(toFile: args[1], atomically: true, encoding: .utf8)
+        settle(6)
+      } else {
+        // Without a file it is for a person to look at: stay until closed.
+        while window.isVisible { settle(0.2) }
+      }
+    } else {
+      let dir = URL(fileURLWithPath: args.first ?? ".")
+      try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+      for tab in SettingsTab.allCases {
+        settings.select(tab)
+        settle(0.8)
+        captureWindow(settings.makeWindow(), to: dir.appendingPathComponent("settings-\(tab.rawValue).png"))
+      }
+    }
+  }
+  exit(0)
+}
+
+// `AgentWatcher --panel-snapshot <dir>` opens the real popover under a
+// status item, with live data, and screenshots the screen area it covers (so
+// the material over what is behind it shows).
+if let flag = CommandLine.arguments.firstIndex(of: "--panel-snapshot") {
+  let dir = URL(fileURLWithPath: CommandLine.arguments.count > flag + 1 ? CommandLine.arguments[flag + 1] : ".")
+  try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+  MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    app.setActivationPolicy(.accessory)
+    let store = UsageStore(cacheURL: nil)
+    store.refresh()
+    while store.isRefreshing || store.lastRefresh == nil { settle(0.1) }
+    let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+    item.button?.image = StatusIcon.image(remaining: store.iconRemaining, alert: store.alertColor,
+                                          critical: store.alertLevel == .critical, exhausted: store.iconExhausted)
+    let popover = NSPopover()
+    popover.animates = false
+    let panel = NSHostingController(rootView: PanelView(store: store, updater: Updater(), onOpenSettings: {}, onQuit: {}))
+    panel.sizingOptions = [.preferredContentSize]
+    popover.contentViewController = panel
+    settle(0.3)
+    guard let button = item.button else { exit(1) }
+    NSApp.activate()
+    popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+    settle(1.5)
+    captureArea(of: panel.view.window, to: dir.appendingPathComponent("panel.png"), margin: 40)
+    popover.close()
+    NSStatusBar.system.removeStatusItem(item)
   }
   exit(0)
 }
