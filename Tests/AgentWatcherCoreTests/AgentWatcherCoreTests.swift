@@ -1073,13 +1073,13 @@ final class PaceTests: XCTestCase {
       "seven_day": ["utilization": 20.0, "resets_at": "2026-11-23T07:00:00Z"],
       "limits": [["kind": "weekly_scoped", "percent": 5, "scope": ["model": ["display_name": "Fable"]]]],
     ])
-    XCTAssertEqual(claude.map(\.duration), [5 * 3600, 7 * Pace.day, 7 * Pace.day])
+    XCTAssertEqual(claude.map(\.duration), [5 * 3600.0, 7 * Pace.day, 7 * Pace.day] as [TimeInterval?])
 
     let codex = CodexProvider.parse(["rateLimits": [
       "primary": ["usedPercent": 1, "windowDurationMins": 300],
       "secondary": ["usedPercent": 1, "windowDurationMins": 10080],
     ] as JSON])
-    XCTAssertEqual(codex.limits.map(\.duration), [5 * 3600, 7 * Pace.day])
+    XCTAssertEqual(codex.limits.map(\.duration), [5 * 3600.0, 7 * Pace.day] as [TimeInterval?])
 
     let cursor = CursorProvider.parseLimits(["billingCycleStart": "1791982045000", "billingCycleEnd": "1794660445000",
                                              "planUsage": ["totalPercentUsed": 50] as JSON])
