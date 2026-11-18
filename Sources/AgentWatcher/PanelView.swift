@@ -25,6 +25,7 @@ struct PanelView: View {
             usage: usage,
             warning: store.warningThreshold,
             critical: store.criticalThreshold,
+            pace: store.showPace ? store.paceOptions : nil,
             selected: store.pinnedProviderID == usage.id,
             onSelect: { store.togglePinnedProvider(usage.id) }
           )
@@ -115,6 +116,8 @@ struct ProviderCard: View {
   let usage: ProviderUsage
   let warning: Double
   let critical: Double
+  /// Nil hides the pace.
+  var pace: PaceOptions? = PaceOptions()
   var selected: Bool = false
   var onSelect: () -> Void = {}
 
@@ -168,7 +171,7 @@ struct ProviderCard: View {
       }
 
       ForEach(usage.visibleLimits) { limit in
-        LimitRow(limit: limit, warning: warning, critical: critical)
+        LimitRow(limit: limit, warning: warning, critical: critical, pace: pace)
       }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
@@ -226,32 +229,44 @@ struct LimitRow: View {
   let limit: UsageLimit
   let warning: Double
   let critical: Double
+  var pace: PaceOptions? = PaceOptions()
 
   var body: some View {
     TimelineView(.periodic(from: .now, by: 60)) { context in
-      let used = limit.effectiveUsed(now: context.date)
-      let level = Alert.level(remaining: 1 - used, warning: warning, critical: critical)
-      let tint = Alert.color(remaining: 1 - used, warning: warning, critical: critical)
+      let now = context.date
+      let remaining = limit.remaining(now: now)
+      let level = Alert.level(remaining: remaining, warning: warning, critical: critical)
+      let tint = Alert.color(remaining: remaining, warning: warning, critical: critical)
         .map { Color(StatusIcon.nsColor($0)) } ?? Color.accentColor
+      let reading = pace.flatMap { limit.pace(now: now, options: $0) }
 
       VStack(alignment: .leading, spacing: 4) {
         HStack {
           Text(limit.title).font(.callout)
           Spacer()
-          Text("\(limit.percentLeftText(now: context.date)) left")
+          Text("\(limit.percentLeftText(now: now)) left")
             .font(.callout.monospacedDigit().weight(level == nil ? .regular : .semibold))
             .foregroundStyle(level == nil ? Color.primary : tint)
         }
-        Meter(value: used, tint: tint)
-        HStack {
-          Text("\(limit.percentUsedText(now: context.date)) used")
+        Meter(value: remaining, tint: tint, marker: reading?.expectedRemaining, dayMarks: reading?.dayMarks ?? [])
+        HStack(spacing: 4) {
+          if let reading {
+            Text(reading.label)
+              .foregroundStyle(reading.deltaPercent > 0 && reading.delta > 0 ? Color.orange : Color.secondary)
+            if let runsOut = reading.runsOutAt {
+              Text("· runs out in \(Self.duration(runsOut.timeIntervalSince(now)))")
+            }
+          } else {
+            Text("\(limit.percentUsedText(now: now)) used")
+          }
           Spacer()
-          if let resetsAt = limit.resetsAt, resetsAt > context.date {
-            Text("Resets in \(Self.duration(resetsAt.timeIntervalSince(context.date)))")
+          if let resetsAt = limit.resetsAt, resetsAt > now {
+            Text("Resets in \(Self.duration(resetsAt.timeIntervalSince(now)))")
           }
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+        .lineLimit(1)
       }
     }
   }
@@ -265,17 +280,43 @@ struct LimitRow: View {
   }
 }
 
+/// What is left of an allowance: the fill shrinks toward zero as it is used.
+/// `marker` is where an even spread until the reset would be by now; fill
+/// short of it means spending faster than the pace. `dayMarks` split the bar
+/// into the window's days.
 struct Meter: View {
   let value: Double
   let tint: Color
+  var marker: Double? = nil
+  var dayMarks: [Double] = []
 
   var body: some View {
     GeometryReader { geo in
+      let width = geo.size.width
       ZStack(alignment: .leading) {
         Capsule().fill(.quaternary)
-        Capsule().fill(tint).frame(width: max(0, geo.size.width * min(value, 1)))
+        Capsule().fill(tint).frame(width: max(0, width * min(max(value, 0), 1)))
+        ForEach(dayMarks, id: \.self) { mark in
+          Rectangle()
+            .fill(Color(nsColor: .windowBackgroundColor).opacity(0.7))
+            .frame(width: 1)
+            .offset(x: width * mark - 0.5)
+        }
+      }
+      .clipShape(Capsule())
+      .overlay(alignment: .leading) {
+        if let marker {
+          // Pulled in at the ends so the line stays visible on the rounded caps.
+          RoundedRectangle(cornerRadius: 1)
+            .fill(Color.primary)
+            .frame(width: 2, height: geo.size.height + 6)
+            .offset(x: min(max(width * marker - 1, 1), width - 3))
+        }
       }
     }
-    .frame(height: 6)
+    .frame(height: 8)
+    .padding(.vertical, marker == nil ? 0 : 3)
+    .accessibilityElement()
+    .accessibilityLabel("\(Int((value * 100).rounded()))% left")
   }
 }

@@ -200,7 +200,7 @@ public struct ClaudeProvider: UsageProvider {
     guard !active.isEmpty else { return limits }
     var updated = limits
     for (title, resetsAt) in active {
-      let blocked = UsageLimit(title: title, used: 1, resetsAt: resetsAt, fullIsExact: true)
+      let blocked = UsageLimit(title: title, used: 1, resetsAt: resetsAt, fullIsExact: true, duration: UsageLimit.inferredDuration(title))
       if let index = updated.firstIndex(where: { $0.title == title && $0.countsTowardAlert }) {
         let current = updated[index]
         updated[index] = UsageLimit(
@@ -209,7 +209,8 @@ public struct ClaudeProvider: UsageProvider {
           resetsAt: resetsAt,
           countsTowardAlert: true,
           shownInPanel: current.shownInPanel,
-          fullIsExact: true
+          fullIsExact: true,
+          duration: current.duration ?? UsageLimit.inferredDuration(title)
         )
       } else {
         updated.append(blocked)
@@ -218,14 +219,17 @@ public struct ClaudeProvider: UsageProvider {
     return updated
   }
 
+  static let sessionLength: TimeInterval = 5 * 3600
+  static let weekLength: TimeInterval = 7 * Pace.day
+
   static func parseLimits(_ payload: JSON) -> [UsageLimit] {
     var limits: [UsageLimit] = []
-    func add(_ key: String, _ title: String) {
+    func add(_ key: String, _ title: String, _ duration: TimeInterval) {
       guard let bucket = payload.object(key), let pct = bucket.number("utilization"), pct >= 0 else { return }
-      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(bucket["resets_at"]), fullIsExact: false))
+      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: Dates.parse(bucket["resets_at"]), fullIsExact: false, duration: duration))
     }
-    add("five_hour", "Session (5h)")
-    add("seven_day", "Weekly")
+    add("five_hour", "Session (5h)", sessionLength)
+    add("seven_day", "Weekly", weekLength)
 
     // T3 Code maps hub `limits` the same way: unscoped rows fill Session/Weekly
     // when the top-level buckets are null; `weekly_scoped` (Fable) is a
@@ -258,7 +262,8 @@ public struct ClaudeProvider: UsageProvider {
         used: pct / 100,
         resetsAt: Dates.parse(entry["resets_at"]),
         countsTowardAlert: countsTowardAlert,
-        fullIsExact: false
+        fullIsExact: false,
+        duration: window == "Weekly" ? weekLength : window == "Session" ? sessionLength : nil
       ))
     }
     return limits

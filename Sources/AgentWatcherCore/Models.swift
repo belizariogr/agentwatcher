@@ -19,17 +19,21 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
   /// keeps working at Anthropic's 100: usage can run past a window's cap, and
   /// only the request's own status says whether it is refused.
   public let fullIsExact: Bool
+  /// Length of the window, in seconds, so the pace knows where it started
+  /// (`resetsAt - duration`). Nil when the harness does not say.
+  public let duration: TimeInterval?
 
-  public init(title: String, used: Double, resetsAt: Date?, countsTowardAlert: Bool = true, shownInPanel: Bool = true, fullIsExact: Bool = true) {
+  public init(title: String, used: Double, resetsAt: Date?, countsTowardAlert: Bool = true, shownInPanel: Bool = true, fullIsExact: Bool = true, duration: TimeInterval? = nil) {
     self.title = title
     self.used = min(1, max(0, used))
     self.resetsAt = resetsAt
     self.countsTowardAlert = countsTowardAlert
     self.shownInPanel = shownInPanel
     self.fullIsExact = fullIsExact
+    self.duration = duration.flatMap { $0 > 0 ? $0 : nil }
   }
 
-  enum CodingKeys: String, CodingKey { case title, used, resetsAt, countsTowardAlert, shownInPanel, fullIsExact }
+  enum CodingKeys: String, CodingKey { case title, used, resetsAt, countsTowardAlert, shownInPanel, fullIsExact, duration }
 
   public init(from decoder: Decoder) throws {
     let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -39,6 +43,20 @@ public struct UsageLimit: Identifiable, Equatable, Sendable, Codable {
     countsTowardAlert = try c.decodeIfPresent(Bool.self, forKey: .countsTowardAlert) ?? true
     shownInPanel = try c.decodeIfPresent(Bool.self, forKey: .shownInPanel) ?? (title != "Overall")
     fullIsExact = try c.decodeIfPresent(Bool.self, forKey: .fullIsExact) ?? true
+    // Caches from before the pace only have the title to go by.
+    duration = try c.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? Self.inferredDuration(title)
+  }
+
+  /// The window length a title implies, for limits saved without one.
+  static func inferredDuration(_ title: String) -> TimeInterval? {
+    if title == "Weekly" || title.hasSuffix("· Weekly") { return 7 * Pace.day }
+    if title == "Session (5h)" { return 5 * 3600 }
+    return nil
+  }
+
+  /// Where this window stands against an even spread until its reset.
+  public func pace(now: Date = Date(), options: PaceOptions = PaceOptions(), calendar: Calendar = .current) -> PaceReading? {
+    Pace.reading(for: self, now: now, options: options, calendar: calendar)
   }
 
   /// A window whose reset time has passed is empty again, even if the last

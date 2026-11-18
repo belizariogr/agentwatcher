@@ -128,10 +128,17 @@ public struct CursorProvider: UsageProvider {
   static func parseLimits(_ payload: JSON) -> [UsageLimit] {
     guard let plan = payload.object("planUsage") else { return [] }
     let resets = Dates.parse(payload["billingCycleEnd"])
+    // The cycle's own start when given; a calendar month before its end otherwise.
+    let cycle: TimeInterval? = {
+      if let resets, let start = Dates.parse(payload["billingCycleStart"]), start < resets {
+        return resets.timeIntervalSince(start)
+      }
+      return Pace.monthBefore(resets)
+    }()
     var limits: [UsageLimit] = []
     func add(_ key: String, _ title: String, countsTowardAlert: Bool = true) {
       guard let pct = plan.number(key), pct >= 0 else { return }
-      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: resets, countsTowardAlert: countsTowardAlert))
+      limits.append(UsageLimit(title: title, used: pct / 100, resetsAt: resets, countsTowardAlert: countsTowardAlert, duration: cycle))
     }
     add("totalPercentUsed", "Overall")
     add("autoPercentUsed", "Cursor Models", countsTowardAlert: false)
@@ -141,15 +148,15 @@ public struct CursorProvider: UsageProvider {
     if hasBothPools {
       limits = limits.map {
         UsageLimit(title: $0.title, used: $0.used, resetsAt: $0.resetsAt,
-                   countsTowardAlert: $0.countsTowardAlert, shownInPanel: $0.title != "Overall")
+                   countsTowardAlert: $0.countsTowardAlert, shownInPanel: $0.title != "Overall", duration: $0.duration)
       }
     }
     if !limits.contains(where: \.countsTowardAlert) {
-      limits = limits.map { UsageLimit(title: $0.title, used: $0.used, resetsAt: $0.resetsAt) }
+      limits = limits.map { UsageLimit(title: $0.title, used: $0.used, resetsAt: $0.resetsAt, duration: $0.duration) }
     }
     // Older plans only report spend against the included amount.
     if limits.isEmpty, let spent = plan.number("includedSpend"), let limit = plan.number("limit"), limit > 0 {
-      limits.append(UsageLimit(title: "Monthly", used: spent / limit, resetsAt: resets))
+      limits.append(UsageLimit(title: "Monthly", used: spent / limit, resetsAt: resets, duration: cycle))
     }
     return limits
   }

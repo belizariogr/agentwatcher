@@ -58,6 +58,19 @@ struct SettingsView: View {
           .foregroundStyle(.secondary)
       }
 
+      Section {
+        Toggle("Show pace marker", isOn: $store.showPace)
+        Toggle("Skip Saturdays", isOn: $store.paceSkipSaturday)
+          .disabled(!store.showPace)
+        Toggle("Skip Sundays", isOn: $store.paceSkipSunday)
+          .disabled(!store.showPace)
+      } header: {
+        Text("Pace")
+      } footer: {
+        Text("The marker shows how much should be left by now if the allowance were spread evenly until the reset. A bar short of it is spending faster. Skipped days apply to weekly and monthly windows.")
+          .foregroundStyle(.secondary)
+      }
+
       Section("Harnesses") {
         ForEach(store.providers, id: \.id) { provider in
           let installed = provider.isInstalled()

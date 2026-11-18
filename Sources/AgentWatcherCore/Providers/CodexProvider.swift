@@ -85,14 +85,16 @@ public struct CodexProvider: UsageProvider {
       let minutes = reported > 0 ? reported : fallbackMins
       var title = windowTitle(minutes)
       if limits.contains(where: { $0.title == title }) { title += " (\(key))" }
-      limits.append(UsageLimit(title: title, used: used / 100, resetsAt: Dates.parse(window["resetsAt"])))
+      limits.append(UsageLimit(title: title, used: used / 100, resetsAt: Dates.parse(window["resetsAt"]), duration: TimeInterval(minutes * 60)))
     }
     if let individual = snapshot.object("individualLimit"),
        let remaining = individual.number("remainingPercent") {
+      let resetsAt = Dates.parse(individual["resetsAt"])
       limits.append(UsageLimit(
         title: "Monthly credit",
         used: (100 - remaining) / 100,
-        resetsAt: Dates.parse(individual["resetsAt"])
+        resetsAt: resetsAt,
+        duration: Pace.monthBefore(resetsAt)
       ))
     }
     return (limits, planType.map(planLabel))
