@@ -17,6 +17,9 @@ public final class UsageStore: ObservableObject {
     public static let hiddenProviders = "hiddenProviders"
     /// Harness the tray icon follows. Absent means automatic: the tightest window.
     public static let pinnedProvider = "pinnedProvider"
+    public static let showPace = "showPace"
+    public static let paceSkipSaturday = "paceSkipSaturday"
+    public static let paceSkipSunday = "paceSkipSunday"
   }
 
   public static let refreshIntervalChoices: [TimeInterval] = [60, 120, 300, 600, 900, 1800, 3600]
@@ -70,6 +73,25 @@ public final class UsageStore: ObservableObject {
     }
   }
 
+  /// Draw the pace marker on each bar and say how far off it the usage is.
+  @Published public var showPace: Bool {
+    didSet { defaults.set(showPace, forKey: Keys.showPace) }
+  }
+
+  /// Leave Saturdays out of the pace of weekly and monthly windows.
+  @Published public var paceSkipSaturday: Bool {
+    didSet { defaults.set(paceSkipSaturday, forKey: Keys.paceSkipSaturday) }
+  }
+
+  /// Leave Sundays out of the pace of weekly and monthly windows.
+  @Published public var paceSkipSunday: Bool {
+    didSet { defaults.set(paceSkipSunday, forKey: Keys.paceSkipSunday) }
+  }
+
+  public var paceOptions: PaceOptions {
+    PaceOptions(skipSaturday: paceSkipSaturday, skipSunday: paceSkipSunday)
+  }
+
   nonisolated public static let allProviders: [any UsageProvider] = [ClaudeProvider(), CodexProvider(), CursorProvider()]
 
   public let providers: [any UsageProvider]
@@ -100,6 +122,9 @@ public final class UsageStore: ObservableObject {
       criticalThreshold = Alert.defaultCritical < warning ? Alert.defaultCritical : max(0, warning - Alert.step)
     }
     hiddenProviders = Set(defaults.stringArray(forKey: Keys.hiddenProviders) ?? [])
+    showPace = defaults.object(forKey: Keys.showPace) as? Bool ?? true
+    paceSkipSaturday = defaults.bool(forKey: Keys.paceSkipSaturday)
+    paceSkipSunday = defaults.bool(forKey: Keys.paceSkipSunday)
     let storedPin = defaults.string(forKey: Keys.pinnedProvider)
     pinnedProviderID = storedPin?.isEmpty == false ? storedPin : nil
     // Last known numbers, so a rate-limited first refresh after launch still

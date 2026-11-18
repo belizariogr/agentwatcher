@@ -974,3 +974,134 @@ final class UpdaterTests: XCTestCase {
     XCTAssertNil(ReleaseInfo.checksum(for: "Bad.dmg", in: "xyz  Bad.dmg"))
   }
 }
+
+final class PaceTests: XCTestCase {
+  private var utc: Calendar {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    return calendar
+  }
+
+  private func date(_ iso: String) -> Date { ISO8601DateFormatter().date(from: iso)! }
+
+  /// A week from Monday 2026-11-16 00:00 UTC to Monday 2026-11-23.
+  private func weekly(used: Double) -> UsageLimit {
+    UsageLimit(title: "Weekly", used: used, resetsAt: date("2026-11-23T00:00:00Z"), duration: 7 * Pace.day)
+  }
+
+  func testExpectedUseFollowsTheClock() throws {
+    let reading = try XCTUnwrap(weekly(used: 0.5).pace(now: date("2026-11-19T12:00:00Z"), calendar: utc))
+    XCTAssertEqual(reading.expectedUsed, 0.5, accuracy: 1e-9)
+    XCTAssertEqual(reading.expectedRemaining, 0.5, accuracy: 1e-9)
+    XCTAssertEqual(reading.label, "On pace")
+    XCTAssertNil(reading.runsOutAt)
+    XCTAssertEqual(reading.dayMarks.count, 6)
+    XCTAssertEqual(reading.dayMarks[0], 1.0 / 7, accuracy: 1e-9)
+  }
+
+  func testSpendingFasterIsADeficitAndProjectsTheRunOut() throws {
+    // Two days in, 40% used: 2/7 expected, out after five days of that rate.
+    let now = date("2026-11-18T00:00:00Z")
+    let reading = try XCTUnwrap(weekly(used: 0.4).pace(now: now, calendar: utc))
+    XCTAssertEqual(reading.expectedUsed, 2.0 / 7, accuracy: 1e-9)
+    XCTAssertEqual(reading.label, "11% in deficit")
+    XCTAssertEqual(try XCTUnwrap(reading.runsOutAt).timeIntervalSince(now), 3 * Pace.day, accuracy: 1)
+  }
+
+  func testSpendingSlowerIsAReserve() throws {
+    let reading = try XCTUnwrap(weekly(used: 0.1).pace(now: date("2026-11-20T00:00:00Z"), calendar: utc))
+    XCTAssertEqual(reading.label, "47% in reserve")
+    XCTAssertNil(reading.runsOutAt)
+  }
+
+  func testSkippedWeekendSplitsTheWeekIntoFiveDays() throws {
+    let options = PaceOptions(skipSaturday: true, skipSunday: true)
+    let friday = try XCTUnwrap(weekly(used: 0).pace(now: date("2026-11-21T00:00:00Z"), options: options, calendar: utc))
+    XCTAssertEqual(friday.expectedUsed, 1, accuracy: 1e-9)
+    // The marker stands still over the weekend.
+    let sunday = try XCTUnwrap(weekly(used: 0).pace(now: date("2026-11-22T18:00:00Z"), options: options, calendar: utc))
+    XCTAssertEqual(sunday.expectedUsed, 1, accuracy: 1e-9)
+    let wednesday = try XCTUnwrap(weekly(used: 0).pace(now: date("2026-11-18T12:00:00Z"), options: options, calendar: utc))
+    XCTAssertEqual(wednesday.expectedUsed, 0.5, accuracy: 1e-9)
+    XCTAssertEqual(wednesday.dayMarks.count, 4)
+    XCTAssertEqual(wednesday.dayMarks[0], 0.2, accuracy: 1e-9)
+  }
+
+  func testSkippingOnlySundayCountsSixDays() throws {
+    let reading = try XCTUnwrap(weekly(used: 0).pace(now: date("2026-11-19T00:00:00Z"), options: PaceOptions(skipSunday: true), calendar: utc))
+    XCTAssertEqual(reading.expectedUsed, 3.0 / 6, accuracy: 1e-9)
+  }
+
+  func testRunOutSkipsTheWeekend() throws {
+    // Thursday noon, 3.5 workdays in, 70% used: the rest lasts 1.5 workdays,
+    // which is Friday night, never Saturday.
+    let options = PaceOptions(skipSaturday: true, skipSunday: true)
+    let now = date("2026-11-19T12:00:00Z")
+    let reading = try XCTUnwrap(weekly(used: 0.7).pace(now: now, options: options, calendar: utc))
+    XCTAssertEqual(reading.expectedUsed, 0.7, accuracy: 1e-9)
+    XCTAssertNil(reading.runsOutAt)
+    let faster = try XCTUnwrap(weekly(used: 0.8).pace(now: now, options: options, calendar: utc))
+    // 0.2 left at 0.8/3.5 per day is 0.875 workdays: Friday 09:00.
+    XCTAssertEqual(try XCTUnwrap(faster.runsOutAt), date("2026-11-20T09:00:00Z"))
+  }
+
+  func testSessionsIgnoreSkippedDays() throws {
+    // Saturday, across midnight: no skipped time and no day mark.
+    let session = UsageLimit(title: "Session (5h)", used: 0.2, resetsAt: date("2026-11-21T03:00:00Z"), duration: 5 * 3600)
+    let reading = try XCTUnwrap(session.pace(now: date("2026-11-20T23:00:00Z"), options: PaceOptions(skipSaturday: true), calendar: utc))
+    XCTAssertEqual(reading.expectedUsed, 0.2, accuracy: 1e-9)
+    XCTAssertEqual(reading.dayMarks, [])
+  }
+
+  func testMonthlyWindowsSkipWeekendsWithoutDayMarks() throws {
+    let monthly = UsageLimit(title: "Monthly", used: 0, resetsAt: date("2026-12-01T00:00:00Z"), duration: 30 * Pace.day)
+    let reading = try XCTUnwrap(monthly.pace(now: date("2026-11-16T00:00:00Z"), options: PaceOptions(skipSaturday: true, skipSunday: true), calendar: utc))
+    // November 2026: 21 workdays, 10 of them before the 16th.
+    XCTAssertEqual(reading.expectedUsed, 10.0 / 21, accuracy: 1e-9)
+    XCTAssertEqual(reading.dayMarks, [])
+  }
+
+  func testNoPaceWithoutALengthOrAfterTheReset() {
+    let unknown = UsageLimit(title: "Other Models", used: 0.3, resetsAt: date("2026-11-23T00:00:00Z"))
+    XCTAssertNil(unknown.pace(now: date("2026-11-19T00:00:00Z"), calendar: utc))
+    XCTAssertNil(weekly(used: 0.3).pace(now: date("2026-11-24T00:00:00Z"), calendar: utc))
+  }
+
+  func testProvidersReportWindowLengths() throws {
+    let claude = ClaudeProvider.parseLimits([
+      "five_hour": ["utilization": 10.0, "resets_at": "2026-11-17T22:00:00Z"],
+      "seven_day": ["utilization": 20.0, "resets_at": "2026-11-23T07:00:00Z"],
+      "limits": [["kind": "weekly_scoped", "percent": 5, "scope": ["model": ["display_name": "Fable"]]]],
+    ])
+    XCTAssertEqual(claude.map(\.duration), [5 * 3600, 7 * Pace.day, 7 * Pace.day])
+
+    let codex = CodexProvider.parse(["rateLimits": [
+      "primary": ["usedPercent": 1, "windowDurationMins": 300],
+      "secondary": ["usedPercent": 1, "windowDurationMins": 10080],
+    ] as JSON])
+    XCTAssertEqual(codex.limits.map(\.duration), [5 * 3600, 7 * Pace.day])
+
+    let cursor = CursorProvider.parseLimits(["billingCycleStart": "1791982045000", "billingCycleEnd": "1794660445000",
+                                             "planUsage": ["totalPercentUsed": 50] as JSON])
+    XCTAssertEqual(try XCTUnwrap(cursor.first?.duration), 1794660445 - 1791982045, accuracy: 1e-6)
+  }
+
+  func testCachedLimitWithoutLengthInfersItFromTheTitle() throws {
+    let json = #"{"title":"Weekly","used":0.4,"resetsAt":800000000}"#
+    let limit = try JSONDecoder().decode(UsageLimit.self, from: Data(json.utf8))
+    XCTAssertEqual(limit.duration, 7 * Pace.day)
+  }
+
+  @MainActor func testPaceSettingsPersist() {
+    let defaults = UserDefaults(suiteName: "aw.test.pace")!
+    defaults.removePersistentDomain(forName: "aw.test.pace")
+    let store = UsageStore(providers: [], defaults: defaults, cacheURL: nil)
+    XCTAssertTrue(store.showPace)
+    XCTAssertEqual(store.paceOptions, PaceOptions())
+    store.showPace = false
+    store.paceSkipSaturday = true
+    let reloaded = UsageStore(providers: [], defaults: defaults, cacheURL: nil)
+    XCTAssertFalse(reloaded.showPace)
+    XCTAssertEqual(reloaded.paceOptions, PaceOptions(skipSaturday: true, skipSunday: false))
+  }
+}
